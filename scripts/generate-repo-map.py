@@ -17,15 +17,21 @@ Usage:
 """
 
 import ast
+import hashlib
+import json
 import sys
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from difflib import SequenceMatcher
 from collections import defaultdict
 
 import tree_sitter_cpp as tscpp
 import tree_sitter_rust as tsrust
 from tree_sitter import Language, Parser, Node
+
+
+# Cache format version - bump when Symbol structure changes
+CACHE_VERSION = 1
 
 
 @dataclass
@@ -46,6 +52,118 @@ class Symbol:
     @property
     def location(self) -> str:
         return f"{self.file_path}:{self.line_number}"
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Symbol":
+        """Create from dictionary."""
+        return cls(**d)
+
+
+@dataclass
+class FileCache:
+    """Cache entry for a single file."""
+    mtime: float
+    content_hash: str
+    symbols: list[Symbol]
+
+    def to_dict(self) -> dict:
+        return {
+            "mtime": self.mtime,
+            "content_hash": self.content_hash,
+            "symbols": [s.to_dict() for s in self.symbols],
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "FileCache":
+        return cls(
+            mtime=d["mtime"],
+            content_hash=d["content_hash"],
+            symbols=[Symbol.from_dict(s) for s in d["symbols"]],
+        )
+
+
+class SymbolCache:
+    """Persistent cache for extracted symbols."""
+
+    def __init__(self, cache_path: Path):
+        self.cache_path = cache_path
+        self.files: dict[str, FileCache] = {}
+        self._load()
+
+    def _load(self) -> None:
+        """Load cache from disk."""
+        if not self.cache_path.exists():
+            return
+        try:
+            data = json.loads(self.cache_path.read_text())
+            if data.get("version") != CACHE_VERSION:
+                return  # Invalidate cache on version mismatch
+            for file_path, entry in data.get("files", {}).items():
+                self.files[file_path] = FileCache.from_dict(entry)
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass  # Ignore corrupt cache
+
+    def save(self) -> None:
+        """Save cache to disk."""
+        data = {
+            "version": CACHE_VERSION,
+            "files": {fp: fc.to_dict() for fp, fc in self.files.items()},
+        }
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        self.cache_path.write_text(json.dumps(data, indent=2))
+
+    def get_symbols(self, file_path: Path, rel_path: str) -> tuple[list[Symbol], bool]:
+        """
+        Get symbols for a file, using cache if valid.
+        Returns (symbols, was_cached).
+        """
+        cached = self.files.get(rel_path)
+
+        # Check if file still exists
+        if not file_path.exists():
+            if cached:
+                del self.files[rel_path]
+            return [], False
+
+        current_mtime = file_path.stat().st_mtime
+
+        # Fast path: mtime unchanged
+        if cached and cached.mtime == current_mtime:
+            return cached.symbols, True
+
+        # mtime changed - check content hash
+        try:
+            content = file_path.read_bytes()
+            current_hash = hashlib.sha256(content).hexdigest()
+        except IOError:
+            return [], False
+
+        # Content unchanged - just update mtime in cache
+        if cached and cached.content_hash == current_hash:
+            cached.mtime = current_mtime
+            return cached.symbols, True
+
+        # Content changed - need to reparse
+        return [], False
+
+    def update(self, rel_path: str, mtime: float, content_hash: str, symbols: list[Symbol]) -> None:
+        """Update cache with newly parsed symbols."""
+        self.files[rel_path] = FileCache(mtime=mtime, content_hash=content_hash, symbols=symbols)
+
+    def remove_stale(self, valid_paths: set[str]) -> None:
+        """Remove entries for files that no longer exist."""
+        stale = [fp for fp in self.files if fp not in valid_paths]
+        for fp in stale:
+            del self.files[fp]
+
+
+def compute_file_hash(file_path: Path) -> str:
+    """Compute SHA256 hash of file contents."""
+    return hashlib.sha256(file_path.read_bytes()).hexdigest()
 
 
 def get_function_signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
@@ -639,6 +757,37 @@ def find_rust_files(root: Path) -> list[Path]:
     return find_files(root, {".rs"})
 
 
+def extract_with_cache(
+    file_path: Path,
+    root: Path,
+    cache: SymbolCache,
+    extractor: callable,
+) -> tuple[list[Symbol], bool]:
+    """
+    Extract symbols from a file, using cache if available.
+    Returns (symbols, was_cached).
+    """
+    rel_path = str(file_path.relative_to(root))
+
+    # Try cache first
+    symbols, was_cached = cache.get_symbols(file_path, rel_path)
+    if was_cached:
+        return symbols, True
+
+    # Need to parse - extract symbols
+    symbols = extractor(file_path, root)
+
+    # Update cache
+    try:
+        mtime = file_path.stat().st_mtime
+        content_hash = compute_file_hash(file_path)
+        cache.update(rel_path, mtime, content_hash, symbols)
+    except IOError:
+        pass
+
+    return symbols, False
+
+
 def main():
     root = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path.cwd()
 
@@ -652,17 +801,53 @@ def main():
         print(f"No source files found in {root}")
         return
 
+    # Load symbol cache
+    claude_dir = root / ".claude"
+    cache = SymbolCache(claude_dir / "repo-map-cache.json")
+
+    # Track cache statistics
+    cached_count = 0
+    parsed_count = 0
+
     # Extract symbols from all file types
     all_symbols = []
+    all_rel_paths = set()
 
     for file_path in python_files:
-        all_symbols.extend(extract_symbols_from_python(file_path, root))
+        rel_path = str(file_path.relative_to(root))
+        all_rel_paths.add(rel_path)
+        symbols, was_cached = extract_with_cache(file_path, root, cache, extract_symbols_from_python)
+        all_symbols.extend(symbols)
+        if was_cached:
+            cached_count += 1
+        else:
+            parsed_count += 1
 
     for file_path in cpp_files:
-        all_symbols.extend(extract_symbols_from_cpp(file_path, root))
+        rel_path = str(file_path.relative_to(root))
+        all_rel_paths.add(rel_path)
+        symbols, was_cached = extract_with_cache(file_path, root, cache, extract_symbols_from_cpp)
+        all_symbols.extend(symbols)
+        if was_cached:
+            cached_count += 1
+        else:
+            parsed_count += 1
 
     for file_path in rust_files:
-        all_symbols.extend(extract_symbols_from_rust(file_path, root))
+        rel_path = str(file_path.relative_to(root))
+        all_rel_paths.add(rel_path)
+        symbols, was_cached = extract_with_cache(file_path, root, cache, extract_symbols_from_rust)
+        all_symbols.extend(symbols)
+        if was_cached:
+            cached_count += 1
+        else:
+            parsed_count += 1
+
+    # Remove deleted files from cache
+    cache.remove_stale(all_rel_paths)
+
+    # Save updated cache
+    cache.save()
 
     similar_classes = find_similar_classes(all_symbols)
     similar_functions = find_similar_functions(all_symbols)
@@ -670,7 +855,6 @@ def main():
 
     repo_map = format_repo_map(all_symbols, similar_classes, similar_functions, doc_coverage, root)
 
-    claude_dir = root / ".claude"
     claude_dir.mkdir(exist_ok=True)
     (claude_dir / "repo-map.md").write_text(repo_map)
 
@@ -686,7 +870,8 @@ def main():
         file_counts.append(f"{len(cpp_files)} C++")
     if rust_files:
         file_counts.append(f"{len(rust_files)} Rust")
-    print(f"Files scanned: {total_files} ({', '.join(file_counts)})")
+    print(f"Files: {total_files} ({', '.join(file_counts)})")
+    print(f"Cache: {cached_count} cached, {parsed_count} parsed")
 
     print(f"Symbols found: {len(all_symbols)}")
     if similar_classes:

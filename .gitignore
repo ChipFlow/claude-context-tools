@@ -20,6 +20,5 @@ venv/
 .DS_Store
 Thumbs.db
 
-# Generated files (not committed, generated per-project)
-# .claude/project-manifest.json
-# .claude/repo-map.md
+# Generated files (created per-project, not part of plugin)
+.claude/
