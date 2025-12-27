@@ -1,11 +1,16 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.10"
-# dependencies = []
+# dependencies = [
+#     "tree-sitter>=0.23.0",
+#     "tree-sitter-cpp>=0.23.0",
+#     "tree-sitter-rust>=0.23.0",
+# ]
 # ///
 """
 Generate a repo map showing functions, classes, and their documentation.
 Helps Claude Code understand what already exists before implementing new features.
+Supports Python, C++, and Rust.
 
 Usage:
     uv run generate-repo-map.py [directory]
@@ -17,6 +22,10 @@ from pathlib import Path
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from collections import defaultdict
+
+import tree_sitter_cpp as tscpp
+import tree_sitter_rust as tsrust
+from tree_sitter import Language, Parser, Node
 
 
 @dataclass
@@ -118,6 +127,285 @@ def extract_symbols_from_python(file_path: Path, relative_to: Path) -> list[Symb
                 file_path=rel_path,
                 line_number=node.lineno,
             ))
+
+    return symbols
+
+
+# Tree-sitter parsers (initialized lazily)
+_cpp_parser: Parser | None = None
+_rust_parser: Parser | None = None
+
+
+def get_cpp_parser() -> Parser:
+    """Get or create the C++ parser."""
+    global _cpp_parser
+    if _cpp_parser is None:
+        _cpp_parser = Parser(Language(tscpp.language()))
+    return _cpp_parser
+
+
+def get_rust_parser() -> Parser:
+    """Get or create the Rust parser."""
+    global _rust_parser
+    if _rust_parser is None:
+        _rust_parser = Parser(Language(tsrust.language()))
+    return _rust_parser
+
+
+def get_doc_comment(node: Node, source: bytes) -> str | None:
+    """Extract doc comments (///, /**, //!) preceding a node."""
+    comments = []
+    prev = node.prev_named_sibling
+
+    while prev and prev.type in ("comment", "line_comment", "block_comment"):
+        text = source[prev.start_byte:prev.end_byte].decode("utf-8").strip()
+        if text.startswith("///") or text.startswith("//!") or text.startswith("/**"):
+            comments.insert(0, text)
+            prev = prev.prev_named_sibling
+        else:
+            break
+
+    if not comments:
+        return None
+
+    # Clean up the first comment line
+    doc = comments[0]
+    if doc.startswith("///"):
+        doc = doc[3:].strip()
+    elif doc.startswith("//!"):
+        doc = doc[3:].strip()
+    elif doc.startswith("/**"):
+        doc = doc[3:].rstrip("*/").strip()
+
+    return get_first_line_of_docstring(doc)
+
+
+def node_text(node: Node | None, source: bytes) -> str:
+    """Get text content of a node."""
+    if node is None:
+        return ""
+    return source[node.start_byte:node.end_byte].decode("utf-8")
+
+
+def extract_symbols_from_cpp(file_path: Path, relative_to: Path) -> list[Symbol]:
+    """Extract classes, structs, and functions from a C++ file."""
+    symbols = []
+
+    try:
+        source = file_path.read_text(encoding='utf-8')
+        source_bytes = source.encode()
+    except (UnicodeDecodeError, IOError):
+        return []
+
+    parser = get_cpp_parser()
+    tree = parser.parse(source_bytes)
+    rel_path = str(file_path.relative_to(relative_to))
+
+    # Use iterative traversal to avoid recursion limit
+    stack: list[tuple[Node, str | None]] = [(tree.root_node, None)]
+
+    while stack:
+        node, class_context = stack.pop()
+
+        # Class definition
+        if node.type == "class_specifier":
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = node_text(name_node, source_bytes)
+                parent = node.parent
+                doc = get_doc_comment(parent if parent else node, source_bytes)
+                symbols.append(Symbol(
+                    name=name,
+                    kind="class",
+                    signature=name,
+                    docstring=doc,
+                    file_path=rel_path,
+                    line_number=node.start_point[0] + 1,
+                ))
+                # Process children with this class as context
+                for child in reversed(node.children):
+                    stack.append((child, name))
+                continue
+
+        # Struct definition
+        elif node.type == "struct_specifier":
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = node_text(name_node, source_bytes)
+                parent = node.parent
+                doc = get_doc_comment(parent if parent else node, source_bytes)
+                symbols.append(Symbol(
+                    name=name,
+                    kind="class",  # Treat structs as classes for similarity detection
+                    signature=name,
+                    docstring=doc,
+                    file_path=rel_path,
+                    line_number=node.start_point[0] + 1,
+                ))
+                for child in reversed(node.children):
+                    stack.append((child, name))
+                continue
+
+        # Function definition
+        elif node.type == "function_definition":
+            declarator = node.child_by_field_name("declarator")
+            if declarator:
+                signature = node_text(declarator, source_bytes)
+                name = extract_cpp_func_name(declarator, source_bytes)
+                doc = get_doc_comment(node, source_bytes)
+
+                if class_context:
+                    symbols.append(Symbol(
+                        name=name,
+                        kind="method",
+                        signature=signature,
+                        docstring=doc,
+                        file_path=rel_path,
+                        line_number=node.start_point[0] + 1,
+                        parent=class_context,
+                    ))
+                else:
+                    symbols.append(Symbol(
+                        name=name,
+                        kind="function",
+                        signature=signature,
+                        docstring=doc,
+                        file_path=rel_path,
+                        line_number=node.start_point[0] + 1,
+                    ))
+
+        # Method declaration in class (prototype)
+        elif node.type == "declaration" and class_context:
+            for child in node.children:
+                if child.type == "function_declarator":
+                    signature = node_text(child, source_bytes)
+                    name = extract_cpp_func_name(child, source_bytes)
+                    doc = get_doc_comment(node, source_bytes)
+                    symbols.append(Symbol(
+                        name=name,
+                        kind="method",
+                        signature=signature,
+                        docstring=doc,
+                        file_path=rel_path,
+                        line_number=node.start_point[0] + 1,
+                        parent=class_context,
+                    ))
+
+        # Add children to stack (reversed to maintain order)
+        for child in reversed(node.children):
+            stack.append((child, class_context))
+
+    return symbols
+
+
+def extract_cpp_func_name(declarator: Node, source: bytes) -> str:
+    """Extract function name from a C++ declarator."""
+    if declarator.type == "function_declarator":
+        inner = declarator.child_by_field_name("declarator")
+        if inner:
+            text = node_text(inner, source)
+            # Handle qualified names like ClassName::method
+            if "::" in text:
+                return text.split("::")[-1]
+            return text
+    return node_text(declarator, source)
+
+
+def extract_symbols_from_rust(file_path: Path, relative_to: Path) -> list[Symbol]:
+    """Extract structs, enums, and functions from a Rust file."""
+    symbols = []
+
+    try:
+        source = file_path.read_text(encoding='utf-8')
+        source_bytes = source.encode()
+    except (UnicodeDecodeError, IOError):
+        return []
+
+    parser = get_rust_parser()
+    tree = parser.parse(source_bytes)
+    rel_path = str(file_path.relative_to(relative_to))
+
+    # Use iterative traversal to avoid recursion limit
+    stack: list[tuple[Node, str | None]] = [(tree.root_node, None)]
+
+    while stack:
+        node, impl_context = stack.pop()
+
+        # Struct
+        if node.type == "struct_item":
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = node_text(name_node, source_bytes)
+                doc = get_doc_comment(node, source_bytes)
+                symbols.append(Symbol(
+                    name=name,
+                    kind="class",  # Treat structs as classes for similarity detection
+                    signature=name,
+                    docstring=doc,
+                    file_path=rel_path,
+                    line_number=node.start_point[0] + 1,
+                ))
+
+        # Enum
+        elif node.type == "enum_item":
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = node_text(name_node, source_bytes)
+                doc = get_doc_comment(node, source_bytes)
+                symbols.append(Symbol(
+                    name=name,
+                    kind="class",  # Treat enums as classes for similarity detection
+                    signature=name,
+                    docstring=doc,
+                    file_path=rel_path,
+                    line_number=node.start_point[0] + 1,
+                ))
+
+        # Impl block
+        elif node.type == "impl_item":
+            type_node = node.child_by_field_name("type")
+            if type_node:
+                type_name = node_text(type_node, source_bytes)
+                for child in reversed(node.children):
+                    stack.append((child, type_name))
+                continue
+
+        # Function
+        elif node.type == "function_item":
+            name_node = node.child_by_field_name("name")
+            params_node = node.child_by_field_name("parameters")
+            ret_node = node.child_by_field_name("return_type")
+
+            if name_node:
+                name = node_text(name_node, source_bytes)
+                params = node_text(params_node, source_bytes) if params_node else "()"
+                ret = node_text(ret_node, source_bytes) if ret_node else ""
+                signature = f"{name}{params}{' ' + ret if ret else ''}"
+                doc = get_doc_comment(node, source_bytes)
+
+                if impl_context:
+                    symbols.append(Symbol(
+                        name=name,
+                        kind="method",
+                        signature=signature,
+                        docstring=doc,
+                        file_path=rel_path,
+                        line_number=node.start_point[0] + 1,
+                        parent=impl_context,
+                    ))
+                else:
+                    symbols.append(Symbol(
+                        name=name,
+                        kind="function",
+                        signature=signature,
+                        docstring=doc,
+                        file_path=rel_path,
+                        line_number=node.start_point[0] + 1,
+                    ))
+
+        # Add children to stack
+        for child in reversed(node.children):
+            stack.append((child, impl_context))
 
     return symbols
 
@@ -319,23 +607,62 @@ def format_repo_map(symbols: list[Symbol], similar_classes: list, similar_functi
     return "\n".join(output)
 
 
+EXCLUDE_DIRS = {
+    "node_modules", ".git", "__pycache__", "venv", ".venv", "target", "build",
+    "dist", ".next", ".cache", "vendor", ".tox", ".pytest_cache", ".mypy_cache",
+    ".ruff_cache", "site-packages", "eggs", ".eggs"
+}
+
+
+def find_files(root: Path, extensions: set[str]) -> list[Path]:
+    """Find all files with given extensions, excluding common non-source directories."""
+    files = []
+    for ext in extensions:
+        for path in root.rglob(f"*{ext}"):
+            if not any(ex in path.parts for ex in EXCLUDE_DIRS):
+                files.append(path)
+    return sorted(files)
+
+
 def find_python_files(root: Path) -> list[Path]:
-    """Find all Python files, excluding common non-source directories."""
-    exclude_dirs = {"node_modules", ".git", "__pycache__", "venv", ".venv", "target", "build", "dist", ".next", ".cache", "vendor", ".tox", ".pytest_cache", ".mypy_cache", ".ruff_cache", "site-packages", "eggs", ".eggs"}
-    return sorted([p for p in root.rglob("*.py") if not any(ex in p.parts for ex in exclude_dirs)])
+    """Find all Python files."""
+    return find_files(root, {".py"})
+
+
+def find_cpp_files(root: Path) -> list[Path]:
+    """Find all C++ files."""
+    return find_files(root, {".cpp", ".cc", ".cxx", ".hpp", ".h", ".hxx"})
+
+
+def find_rust_files(root: Path) -> list[Path]:
+    """Find all Rust files."""
+    return find_files(root, {".rs"})
 
 
 def main():
     root = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path.cwd()
 
+    # Find all source files
     python_files = find_python_files(root)
-    if not python_files:
-        print(f"No Python files found in {root}")
+    cpp_files = find_cpp_files(root)
+    rust_files = find_rust_files(root)
+
+    total_files = len(python_files) + len(cpp_files) + len(rust_files)
+    if total_files == 0:
+        print(f"No source files found in {root}")
         return
 
+    # Extract symbols from all file types
     all_symbols = []
+
     for file_path in python_files:
         all_symbols.extend(extract_symbols_from_python(file_path, root))
+
+    for file_path in cpp_files:
+        all_symbols.extend(extract_symbols_from_cpp(file_path, root))
+
+    for file_path in rust_files:
+        all_symbols.extend(extract_symbols_from_rust(file_path, root))
 
     similar_classes = find_similar_classes(all_symbols)
     similar_functions = find_similar_functions(all_symbols)
@@ -350,7 +677,17 @@ def main():
     print(repo_map)
     print("\n---")
     print(f"Repo map saved to: {claude_dir / 'repo-map.md'}")
-    print(f"Files scanned: {len(python_files)}")
+
+    # Show file counts by language
+    file_counts = []
+    if python_files:
+        file_counts.append(f"{len(python_files)} Python")
+    if cpp_files:
+        file_counts.append(f"{len(cpp_files)} C++")
+    if rust_files:
+        file_counts.append(f"{len(rust_files)} Rust")
+    print(f"Files scanned: {total_files} ({', '.join(file_counts)})")
+
     print(f"Symbols found: {len(all_symbols)}")
     if similar_classes:
         print(f"Similar classes found: {len(similar_classes)}")
