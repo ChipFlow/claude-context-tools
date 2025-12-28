@@ -17,6 +17,17 @@ uv run "${SCRIPT_DIR}/generate-manifest.py" "${PROJECT_ROOT}" >/dev/null 2>&1 ||
 
 REPO_MAP="${CLAUDE_DIR}/repo-map.md"
 LOCK_FILE="${CLAUDE_DIR}/repo-map-cache.lock"
+CACHE_FILE="${CLAUDE_DIR}/repo-map-cache.json"
+
+# Check cache version - must match CACHE_VERSION in generate-repo-map.py
+EXPECTED_CACHE_VERSION=2
+if [[ -f "${CACHE_FILE}" ]]; then
+    CACHE_VERSION=$(python3 -c "import json; print(json.load(open('${CACHE_FILE}')).get('version', 0))" 2>/dev/null || echo "0")
+    if [[ "${CACHE_VERSION}" != "${EXPECTED_CACHE_VERSION}" ]]; then
+        # Cache is outdated, delete it to force full reindex
+        rm -f "${CACHE_FILE}" "${REPO_MAP}"
+    fi
+fi
 
 # Determine repo map status message
 if [[ -f "${REPO_MAP}" ]]; then
