@@ -433,9 +433,10 @@ def get_recent_activity(root: Path) -> dict:
 
 
 def count_files_by_type(root: Path) -> dict:
-    """Count source files by extension."""
+    """Count source files by extension (includes vendored code for language detection)."""
     counts = {}
-    exclude_dirs = {"node_modules", ".git", "__pycache__", "venv", ".venv", "target", "build", "dist", ".next", ".cache", "vendor"}
+    # Note: vendor is NOT excluded - we want to detect languages in vendored code
+    exclude_dirs = {"node_modules", ".git", "__pycache__", "venv", ".venv", "target", "build", "dist", ".next", ".cache"}
     extensions = {
         ".py": "Python", ".pyi": "Python (stubs)", ".ts": "TypeScript", ".tsx": "TypeScript (React)",
         ".js": "JavaScript", ".jsx": "JavaScript (React)", ".rs": "Rust", ".go": "Go",
@@ -460,6 +461,28 @@ def generate_manifest(root: Path) -> dict:
     """Generate complete project manifest."""
     build_systems = detect_build_systems(root)
     primary_system = build_systems[0] if build_systems else None
+    file_stats = count_files_by_type(root)
+
+    # Combine languages from build systems and detected files
+    build_languages = set(s.language for s in build_systems)
+    file_languages = set()
+    for lang_name in file_stats.keys():
+        # Map file stat names to canonical language names
+        if "Python" in lang_name:
+            file_languages.add("python")
+        elif "TypeScript" in lang_name:
+            file_languages.add("typescript")
+        elif "JavaScript" in lang_name:
+            file_languages.add("javascript")
+        elif "Rust" in lang_name:
+            file_languages.add("rust")
+        elif "Go" in lang_name:
+            file_languages.add("go")
+        elif lang_name in ("C", "C/C++ Header"):
+            file_languages.add("c")
+        elif "C++" in lang_name:
+            file_languages.add("c++")
+    all_languages = list(build_languages | file_languages)
 
     manifest = {
         "version": "1.0",
@@ -467,15 +490,15 @@ def generate_manifest(root: Path) -> dict:
         "project": {
             "name": root.name,
             "path": str(root.absolute()),
-            "isPolyglot": len(build_systems) > 1,
-            "primaryLanguage": primary_system.language if primary_system else "unknown",
-            "languages": list(set(s.language for s in build_systems)),
+            "isPolyglot": len(all_languages) > 1,
+            "primaryLanguage": primary_system.language if primary_system else (all_languages[0] if all_languages else "unknown"),
+            "languages": all_languages,
         },
         "buildSystems": [asdict(s) for s in build_systems],
         "structure": get_directory_structure(root),
         "entryPoints": find_entry_points(root, build_systems),
         "keyFiles": get_key_files(root),
-        "fileStats": count_files_by_type(root),
+        "fileStats": file_stats,
         "gitActivity": get_recent_activity(root),
     }
 
