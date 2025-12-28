@@ -19,11 +19,15 @@ Usage:
 import ast
 import hashlib
 import json
+import os
 import sys
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from difflib import SequenceMatcher
 from collections import defaultdict
+from multiprocessing import cpu_count
 
 import tree_sitter_cpp as tscpp
 import tree_sitter_rust as tsrust
@@ -32,6 +36,9 @@ from tree_sitter import Language, Parser, Node
 
 # Cache format version - bump when Symbol structure changes
 CACHE_VERSION = 1
+
+# Default to 50% of available cores for parsing
+DEFAULT_WORKERS_PERCENT = 50
 
 
 @dataclass
@@ -89,9 +96,14 @@ class FileCache:
 class SymbolCache:
     """Persistent cache for extracted symbols."""
 
+    # Save cache every N new files parsed
+    SAVE_INTERVAL = 50
+
     def __init__(self, cache_path: Path):
         self.cache_path = cache_path
+        self.lock_path = cache_path.with_suffix(".lock")
         self.files: dict[str, FileCache] = {}
+        self._dirty_count = 0
         self._load()
 
     def _load(self) -> None:
@@ -108,13 +120,44 @@ class SymbolCache:
             pass  # Ignore corrupt cache
 
     def save(self) -> None:
-        """Save cache to disk."""
+        """Save cache to disk atomically."""
         data = {
             "version": CACHE_VERSION,
             "files": {fp: fc.to_dict() for fp, fc in self.files.items()},
         }
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-        self.cache_path.write_text(json.dumps(data, indent=2))
+        # Write to temp file then rename for atomicity
+        tmp_path = self.cache_path.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(data))
+        tmp_path.rename(self.cache_path)
+        self._dirty_count = 0
+
+    def save_if_needed(self) -> None:
+        """Save cache if enough new entries have been added."""
+        if self._dirty_count >= self.SAVE_INTERVAL:
+            self.save()
+
+    def acquire_lock(self) -> bool:
+        """Try to acquire lock. Returns True if successful."""
+        try:
+            if self.lock_path.exists():
+                # Check if lock is stale (older than 1 hour)
+                lock_age = time.time() - self.lock_path.stat().st_mtime
+                if lock_age < 3600:
+                    return False
+                # Stale lock, remove it
+            self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+            self.lock_path.write_text(str(os.getpid()))
+            return True
+        except IOError:
+            return False
+
+    def release_lock(self) -> None:
+        """Release the lock file."""
+        try:
+            self.lock_path.unlink(missing_ok=True)
+        except IOError:
+            pass
 
     def get_symbols(self, file_path: Path, rel_path: str) -> tuple[list[Symbol], bool]:
         """
@@ -153,6 +196,7 @@ class SymbolCache:
     def update(self, rel_path: str, mtime: float, content_hash: str, symbols: list[Symbol]) -> None:
         """Update cache with newly parsed symbols."""
         self.files[rel_path] = FileCache(mtime=mtime, content_hash=content_hash, symbols=symbols)
+        self._dirty_count += 1
 
     def remove_stale(self, valid_paths: set[str]) -> None:
         """Remove entries for files that no longer exist."""
@@ -164,6 +208,48 @@ class SymbolCache:
 def compute_file_hash(file_path: Path) -> str:
     """Compute SHA256 hash of file contents."""
     return hashlib.sha256(file_path.read_bytes()).hexdigest()
+
+
+def get_worker_count(percent: int = DEFAULT_WORKERS_PERCENT) -> int:
+    """Calculate number of worker processes based on CPU count."""
+    cores = cpu_count()
+    workers = max(1, int(cores * percent / 100))
+    return workers
+
+
+def parse_file_worker(args: tuple) -> tuple[str, float, str, list[dict], str]:
+    """
+    Worker function for parallel parsing.
+    Takes (file_path_str, root_str, language) tuple.
+    Returns (rel_path, mtime, content_hash, symbols_as_dicts, language).
+
+    Note: Returns dicts instead of Symbol objects for pickling.
+    """
+    file_path_str, root_str, language = args
+    file_path = Path(file_path_str)
+    root = Path(root_str)
+    rel_path = str(file_path.relative_to(root))
+
+    try:
+        mtime = file_path.stat().st_mtime
+        content = file_path.read_bytes()
+        content_hash = hashlib.sha256(content).hexdigest()
+    except IOError:
+        return (rel_path, 0, "", [], language)
+
+    # Parse based on language
+    if language == "python":
+        symbols = extract_symbols_from_python(file_path, root)
+    elif language == "cpp":
+        symbols = extract_symbols_from_cpp(file_path, root)
+    elif language == "rust":
+        symbols = extract_symbols_from_rust(file_path, root)
+    else:
+        symbols = []
+
+    # Convert to dicts for pickling
+    symbol_dicts = [s.to_dict() for s in symbols]
+    return (rel_path, mtime, content_hash, symbol_dicts, language)
 
 
 def get_function_signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
@@ -791,6 +877,15 @@ def extract_with_cache(
 def main():
     root = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path.cwd()
 
+    # Parse command line options
+    workers_percent = DEFAULT_WORKERS_PERCENT
+    for arg in sys.argv[2:]:
+        if arg.startswith("--workers="):
+            try:
+                workers_percent = int(arg.split("=")[1])
+            except ValueError:
+                pass
+
     # Find all source files
     python_files = find_python_files(root)
     cpp_files = find_cpp_files(root)
@@ -805,49 +900,93 @@ def main():
     claude_dir = root / ".claude"
     cache = SymbolCache(claude_dir / "repo-map-cache.json")
 
-    # Track cache statistics
-    cached_count = 0
-    parsed_count = 0
+    # Try to acquire lock (non-blocking - if locked, another instance is running)
+    if not cache.acquire_lock():
+        print("Another repo-map process is running. Exiting.")
+        return
 
-    # Extract symbols from all file types
-    all_symbols = []
-    all_rel_paths = set()
+    try:
+        # First pass: check cache and categorize files
+        all_symbols = []
+        all_rel_paths = set()
+        files_to_parse = []  # (file_path_str, root_str, language)
 
-    for file_path in python_files:
-        rel_path = str(file_path.relative_to(root))
-        all_rel_paths.add(rel_path)
-        symbols, was_cached = extract_with_cache(file_path, root, cache, extract_symbols_from_python)
-        all_symbols.extend(symbols)
-        if was_cached:
-            cached_count += 1
-        else:
-            parsed_count += 1
+        # Check Python files
+        for file_path in python_files:
+            rel_path = str(file_path.relative_to(root))
+            all_rel_paths.add(rel_path)
+            symbols, was_cached = cache.get_symbols(file_path, rel_path)
+            if was_cached:
+                all_symbols.extend(symbols)
+            else:
+                files_to_parse.append((str(file_path), str(root), "python"))
 
-    for file_path in cpp_files:
-        rel_path = str(file_path.relative_to(root))
-        all_rel_paths.add(rel_path)
-        symbols, was_cached = extract_with_cache(file_path, root, cache, extract_symbols_from_cpp)
-        all_symbols.extend(symbols)
-        if was_cached:
-            cached_count += 1
-        else:
-            parsed_count += 1
+        # Check C++ files
+        for file_path in cpp_files:
+            rel_path = str(file_path.relative_to(root))
+            all_rel_paths.add(rel_path)
+            symbols, was_cached = cache.get_symbols(file_path, rel_path)
+            if was_cached:
+                all_symbols.extend(symbols)
+            else:
+                files_to_parse.append((str(file_path), str(root), "cpp"))
 
-    for file_path in rust_files:
-        rel_path = str(file_path.relative_to(root))
-        all_rel_paths.add(rel_path)
-        symbols, was_cached = extract_with_cache(file_path, root, cache, extract_symbols_from_rust)
-        all_symbols.extend(symbols)
-        if was_cached:
-            cached_count += 1
-        else:
-            parsed_count += 1
+        # Check Rust files
+        for file_path in rust_files:
+            rel_path = str(file_path.relative_to(root))
+            all_rel_paths.add(rel_path)
+            symbols, was_cached = cache.get_symbols(file_path, rel_path)
+            if was_cached:
+                all_symbols.extend(symbols)
+            else:
+                files_to_parse.append((str(file_path), str(root), "rust"))
 
-    # Remove deleted files from cache
-    cache.remove_stale(all_rel_paths)
+        cached_count = total_files - len(files_to_parse)
+        parsed_count = len(files_to_parse)
 
-    # Save updated cache
-    cache.save()
+        # Parallel parse uncached files
+        if files_to_parse:
+            num_workers = get_worker_count(workers_percent)
+            # Use at most as many workers as files to parse
+            num_workers = min(num_workers, len(files_to_parse))
+
+            if num_workers > 1 and len(files_to_parse) > 10:
+                # Parallel parsing
+                print(f"Parsing {len(files_to_parse)} files with {num_workers} workers...")
+                with ProcessPoolExecutor(max_workers=num_workers) as executor:
+                    futures = {executor.submit(parse_file_worker, args): args for args in files_to_parse}
+                    completed = 0
+                    for future in as_completed(futures):
+                        try:
+                            rel_path, mtime, content_hash, symbol_dicts, lang = future.result()
+                            symbols = [Symbol.from_dict(d) for d in symbol_dicts]
+                            all_symbols.extend(symbols)
+                            if mtime > 0:  # Valid result
+                                cache.update(rel_path, mtime, content_hash, symbols)
+                            completed += 1
+                            if completed % 50 == 0:
+                                cache.save_if_needed()
+                                print(f"  Parsed {completed}/{len(files_to_parse)} files...")
+                        except Exception as e:
+                            print(f"  Error parsing file: {e}")
+            else:
+                # Sequential parsing for small number of files
+                for args in files_to_parse:
+                    rel_path, mtime, content_hash, symbol_dicts, lang = parse_file_worker(args)
+                    symbols = [Symbol.from_dict(d) for d in symbol_dicts]
+                    all_symbols.extend(symbols)
+                    if mtime > 0:
+                        cache.update(rel_path, mtime, content_hash, symbols)
+                    cache.save_if_needed()
+
+        # Remove deleted files from cache
+        cache.remove_stale(all_rel_paths)
+
+        # Save final cache state
+        cache.save()
+
+    finally:
+        cache.release_lock()
 
     similar_classes = find_similar_classes(all_symbols)
     similar_functions = find_similar_functions(all_symbols)
