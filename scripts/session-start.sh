@@ -2,6 +2,8 @@
 # Session Start Hook for context-tools plugin
 # Runs when a new Claude Code session starts
 # Generates project manifest and starts repo map generation in background
+#
+# Note: stdout goes to Claude's context, stderr goes to user display
 
 set -euo pipefail
 
@@ -22,6 +24,21 @@ uv run "${SCRIPT_DIR}/generate-manifest.py" "${PROJECT_ROOT}" 2>/dev/null || tru
     nohup uv run "${SCRIPT_DIR}/generate-repo-map.py" "${PROJECT_ROOT}" \
         > "${CLAUDE_DIR}/repo-map-build.log" 2>&1 &
 ) &
+
+# Brief status message for user (stderr = displayed to user)
+REPO_MAP="${CLAUDE_DIR}/repo-map.md"
+if [[ -f "${REPO_MAP}" ]]; then
+    SYMBOL_COUNT=$(grep -c "^\*\*" "${REPO_MAP}" 2>/dev/null || echo "0")
+    if [[ -f "${CLAUDE_DIR}/repo-map-cache.lock" ]]; then
+        echo "[context-tools] Repo map: ${SYMBOL_COUNT} symbols (updating...)" >&2
+    else
+        echo "[context-tools] Repo map: ${SYMBOL_COUNT} symbols" >&2
+    fi
+elif [[ -f "${CLAUDE_DIR}/repo-map-cache.lock" ]]; then
+    echo "[context-tools] Building repo map in background..." >&2
+else
+    echo "[context-tools] Starting repo map generation..." >&2
+fi
 
 # Display project context if manifest exists
 MANIFEST="${PROJECT_ROOT}/.claude/project-manifest.json"
