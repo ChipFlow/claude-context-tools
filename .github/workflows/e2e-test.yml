@@ -7,22 +7,38 @@ on:
 
 # Only run if API key is available (not on forks)
 jobs:
+  check-secrets:
+    name: Check if secrets are available
+    runs-on: ubuntu-latest
+    if: ${{ github.repository == 'ChipFlow/claude-context-tools' }}
+    outputs:
+      has-api-key: ${{ steps.check.outputs.has-api-key }}
+    steps:
+      - name: Check for API key
+        id: check
+        env:
+          HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        run: |
+          if [ "$HAS_KEY" = "true" ]; then
+            echo "has-api-key=true" >> "$GITHUB_OUTPUT"
+            echo "API key is available"
+          else
+            echo "has-api-key=false" >> "$GITHUB_OUTPUT"
+            echo "ANTHROPIC_API_KEY not set - E2E tests will be skipped"
+            echo "To enable E2E tests, add ANTHROPIC_API_KEY to repository secrets"
+          fi
+
   e2e-test:
     name: E2E Test with Claude Code
     runs-on: ubuntu-latest
-    if: ${{ github.repository == 'ChipFlow/claude-context-tools' }}
+    needs: check-secrets
+    if: ${{ needs.check-secrets.outputs.has-api-key == 'true' }}
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
     steps:
-      - name: Check for API key
-        run: |
-          if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "ANTHROPIC_API_KEY not set, skipping E2E tests"
-            echo "To enable E2E tests, add ANTHROPIC_API_KEY to repository secrets"
-            exit 0
-          fi
-          echo "API key available, proceeding with E2E tests"
+      - name: Confirm API key
+        run: echo "API key available, proceeding with E2E tests"
 
       - name: Checkout repository
         uses: actions/checkout@v4
