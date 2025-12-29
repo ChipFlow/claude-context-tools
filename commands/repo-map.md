@@ -5,8 +5,42 @@ Regenerate the repo map for this project to understand the code structure, find 
 Run this command to regenerate with progress display:
 
 ```bash
-# Start regeneration in background (clears old cache first)
-rm -f .claude/repo-map-cache.json .claude/repo-map.md
+# Kill any existing repo-map process
+LOCK_FILE=".claude/repo-map-cache.lock"
+if [[ -f "${LOCK_FILE}" ]]; then
+    OLD_PID=$(cat "${LOCK_FILE}" 2>/dev/null)
+    if [[ -n "${OLD_PID}" ]] && kill -0 "${OLD_PID}" 2>/dev/null; then
+        echo "Stopping existing repo-map process (PID ${OLD_PID})..."
+        kill "${OLD_PID}" 2>/dev/null
+        sleep 1
+    fi
+    rm -f "${LOCK_FILE}"
+fi
+
+# Run any cache format migrations (clears cache if incompatible version)
+python3 -c "
+import json
+from pathlib import Path
+
+CURRENT_VERSION = 2  # Must match CACHE_VERSION in generate-repo-map.py
+
+cache_path = Path('.claude/repo-map-cache.json')
+if cache_path.exists():
+    try:
+        data = json.loads(cache_path.read_text())
+        version = data.get('version', 0)
+        if version != CURRENT_VERSION:
+            # Add migration logic here when format changes
+            # For now, just clear incompatible caches
+            print(f'Cache version {version} != {CURRENT_VERSION}, clearing...')
+            cache_path.unlink()
+    except (json.JSONDecodeError, KeyError):
+        print('Corrupt cache, clearing...')
+        cache_path.unlink()
+" 2>/dev/null
+
+# Clear output file (but keep cache for incremental updates)
+rm -f .claude/repo-map.md
 nohup uv run ${CLAUDE_PLUGIN_ROOT}/scripts/generate-repo-map.py > .claude/repo-map-build.log 2>&1 &
 
 # Show progress until complete (only print when status changes)
