@@ -9,8 +9,9 @@ Run this command to regenerate with progress display:
 rm -f .claude/repo-map-cache.json .claude/repo-map.md
 nohup uv run ${CLAUDE_PLUGIN_ROOT}/scripts/generate-repo-map.py > .claude/repo-map-build.log 2>&1 &
 
-# Show progress until complete
+# Show progress until complete (only print when status changes)
 echo "Regenerating repo map..."
+LAST_PROGRESS=""
 while true; do
     if [[ -f .claude/repo-map-progress.json ]]; then
         PROGRESS=$(python3 -c "
@@ -31,9 +32,11 @@ try:
 except Exception as e:
     print(f'Starting...')
 " 2>/dev/null)
-        echo -ne "\r\033[K${PROGRESS}"
+        if [[ "${PROGRESS}" != "${LAST_PROGRESS}" ]]; then
+            echo "${PROGRESS}"
+            LAST_PROGRESS="${PROGRESS}"
+        fi
         if [[ "${PROGRESS}" == Complete* ]]; then
-            echo ""
             break
         fi
     fi

@@ -10,10 +10,6 @@ Run this to diagnose plugin issues:
 echo "=== Context Tools Debug ==="
 echo ""
 
-# Check plugin root
-echo "Plugin root: ${CLAUDE_PLUGIN_ROOT:-'NOT SET'}"
-echo ""
-
 # Check .claude directory
 CLAUDE_DIR="${PWD}/.claude"
 echo "Project .claude dir: ${CLAUDE_DIR}"
@@ -76,18 +72,7 @@ else
 fi
 echo ""
 
-# Test running session-start manually
-echo "=== Test Session Start Hook ==="
-if [[ -n "${CLAUDE_PLUGIN_ROOT}" ]] && [[ -f "${CLAUDE_PLUGIN_ROOT}/scripts/session-start.sh" ]]; then
-    echo "Running: ${CLAUDE_PLUGIN_ROOT}/scripts/session-start.sh"
-    bash "${CLAUDE_PLUGIN_ROOT}/scripts/session-start.sh" 2>&1
-else
-    echo "Cannot find session-start.sh"
-    echo "CLAUDE_PLUGIN_ROOT=${CLAUDE_PLUGIN_ROOT:-'not set'}"
-fi
-
-echo ""
 echo "=== Debug Complete ==="
 ```
 
-This will show all the plugin state and try running the session-start hook manually.
+This will show all the plugin state files and their contents.
