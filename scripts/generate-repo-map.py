@@ -22,7 +22,7 @@ import json
 import os
 import sys
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from difflib import SequenceMatcher
@@ -37,8 +37,13 @@ from tree_sitter import Language, Parser, Node
 # Cache format version - bump when Symbol structure or file selection changes
 CACHE_VERSION = 2
 
-# Default to 50% of available cores for parsing
-DEFAULT_WORKERS_PERCENT = 50
+# Default to 25% of available cores for parsing, max 4 workers
+# Using threads (not processes) to avoid memory duplication
+DEFAULT_WORKERS_PERCENT = 25
+MAX_WORKERS = 4
+
+# Use sequential parsing for codebases with more files than this
+SEQUENTIAL_THRESHOLD = 500
 
 
 @dataclass
@@ -211,10 +216,10 @@ def compute_file_hash(file_path: Path) -> str:
 
 
 def get_worker_count(percent: int = DEFAULT_WORKERS_PERCENT) -> int:
-    """Calculate number of worker processes based on CPU count."""
+    """Calculate number of worker threads based on CPU count, capped at MAX_WORKERS."""
     cores = cpu_count()
     workers = max(1, int(cores * percent / 100))
-    return workers
+    return min(workers, MAX_WORKERS)
 
 
 def parse_file_worker(args: tuple) -> tuple[str, float, str, list[dict], str]:
@@ -998,10 +1003,13 @@ def main():
             # Calculate update interval for ~10% progress updates
             update_interval = max(1, len(files_to_parse) // 20)  # Update ~20 times = every 5%
 
-            if num_workers > 1 and len(files_to_parse) > 10:
-                # Parallel parsing
-                print(f"Parsing {len(files_to_parse)} files with {num_workers} workers...")
-                with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            # Use sequential for very large codebases to avoid memory issues
+            use_parallel = num_workers > 1 and len(files_to_parse) > 10 and len(files_to_parse) <= SEQUENTIAL_THRESHOLD
+
+            if use_parallel:
+                # Parallel parsing with threads (not processes) to share memory
+                print(f"Parsing {len(files_to_parse)} files with {num_workers} threads...")
+                with ThreadPoolExecutor(max_workers=num_workers) as executor:
                     futures = {executor.submit(parse_file_worker, args): args for args in files_to_parse}
                     completed = 0
                     for future in as_completed(futures):
@@ -1019,7 +1027,9 @@ def main():
                         except Exception as e:
                             print(f"  Error parsing file: {e}")
             else:
-                # Sequential parsing for small number of files
+                # Sequential parsing for small codebases or large ones (to avoid memory issues)
+                if len(files_to_parse) > SEQUENTIAL_THRESHOLD:
+                    print(f"Parsing {len(files_to_parse)} files sequentially (large codebase)...")
                 completed = 0
                 for args in files_to_parse:
                     rel_path, mtime, content_hash, symbol_dicts, lang = parse_file_worker(args)
@@ -1031,6 +1041,8 @@ def main():
                     completed += 1
                     if completed % update_interval == 0 or completed == len(files_to_parse):
                         update_progress("parsing", completed, len(files_to_parse), len(all_symbols))
+                        if len(files_to_parse) > SEQUENTIAL_THRESHOLD:
+                            print(f"  Parsed {completed}/{len(files_to_parse)} files...")
 
         # Remove deleted files from cache
         cache.remove_stale(all_rel_paths)
