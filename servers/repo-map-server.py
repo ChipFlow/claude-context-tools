@@ -84,6 +84,25 @@ async def list_tools() -> list[Tool]:
                 "required": ["file"]
             }
         ),
+        Tool(
+            name="get_symbol_content",
+            description="Get the source code content of a symbol by exact name. Faster than grep for known symbol names.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Exact symbol name to look up. Example: 'MyClass', 'process_data', 'User.save'"
+                    },
+                    "kind": {
+                        "type": "string",
+                        "enum": ["class", "function", "method"],
+                        "description": "Optional: Filter by symbol type if name is ambiguous"
+                    }
+                },
+                "required": ["name"]
+            }
+        ),
     ]
 
 
@@ -99,6 +118,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             )
         elif name == "get_file_symbols":
             result = get_file_symbols(file=arguments["file"])
+        elif name == "get_symbol_content":
+            result = get_symbol_content(
+                name=arguments["name"],
+                kind=arguments.get("kind")
+            )
         else:
             result = {"error": f"Unknown tool: {name}"}
 
@@ -153,6 +177,70 @@ def get_file_symbols(file: str) -> list[dict]:
             [file]
         )
         return [row_to_dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_symbol_content(name: str, kind: str | None = None) -> dict:
+    """Get the source code content of a symbol by exact name."""
+    conn = get_db()
+    try:
+        # Handle Parent.method format
+        if "." in name:
+            parent, method_name = name.rsplit(".", 1)
+            query = "SELECT * FROM symbols WHERE name = ? AND parent = ?"
+            params: list = [method_name, parent]
+        else:
+            query = "SELECT * FROM symbols WHERE name = ?"
+            params = [name]
+
+        if kind:
+            query += " AND kind = ?"
+            params.append(kind)
+
+        cursor = conn.execute(query, params)
+        rows = cursor.fetchall()
+
+        if not rows:
+            return {"error": f"Symbol '{name}' not found"}
+
+        # If multiple matches, return info about all of them
+        if len(rows) > 1 and kind is None:
+            matches = [row_to_dict(row) for row in rows]
+            return {
+                "error": f"Multiple symbols named '{name}' found. Specify 'kind' to disambiguate.",
+                "matches": matches
+            }
+
+        row = rows[0]
+        symbol_info = row_to_dict(row)
+        file_path = PROJECT_ROOT / row["file_path"]
+
+        if not file_path.exists():
+            return {"error": f"File not found: {row['file_path']}", "symbol": symbol_info}
+
+        # Read file content
+        try:
+            lines = file_path.read_text(encoding="utf-8").splitlines()
+        except (IOError, UnicodeDecodeError) as e:
+            return {"error": f"Could not read file: {e}", "symbol": symbol_info}
+
+        start_line = row["line_number"]
+        end_line = row["end_line_number"]
+
+        if end_line is None:
+            # Fallback: return just the start line and a few following lines
+            end_line = min(start_line + 20, len(lines))
+
+        # Extract content (convert to 0-indexed)
+        content_lines = lines[start_line - 1:end_line]
+        content = "\n".join(content_lines)
+
+        return {
+            "symbol": symbol_info,
+            "content": content,
+            "location": f"{row['file_path']}:{start_line}-{end_line}"
+        }
     finally:
         conn.close()
 

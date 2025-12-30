@@ -239,6 +239,14 @@ jobs:
           assert 'Calculator' in symbol_names, "Calculator not in database"
           assert 'Point' in symbol_names, "Point not in database"
 
+          # Check end_line_number column exists and has values
+          cursor = conn.execute("SELECT name, line_number, end_line_number FROM symbols WHERE name = 'helper_function'")
+          row = cursor.fetchone()
+          assert row is not None, "helper_function not found"
+          assert row[2] is not None, "end_line_number should not be None for helper_function"
+          assert row[2] > row[1], f"end_line_number ({row[2]}) should be > line_number ({row[1]})"
+          print(f"end_line_number verified: helper_function spans lines {row[1]}-{row[2]}")
+
           print(f"SQLite database valid with {count} symbols")
           conn.close()
           EOF
@@ -318,6 +326,50 @@ jobs:
 
           conn.close()
           print("All MCP query function tests passed!")
+          EOF
+
+      - name: Test get_symbol_content function
+        run: |
+          cd test-project
+          PROJECT_ROOT="$(pwd)"
+          export PROJECT_ROOT
+          # Use --project .. to find pyproject.toml with MCP dependency
+          uv run --project .. python3 << 'EOF'
+          import os
+          import sqlite3
+          from pathlib import Path
+
+          PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", os.getcwd()))
+          DB_PATH = PROJECT_ROOT / ".claude" / "repo-map.db"
+
+          conn = sqlite3.connect(DB_PATH)
+          conn.row_factory = sqlite3.Row
+
+          # Test get_symbol_content logic
+          cursor = conn.execute(
+              "SELECT * FROM symbols WHERE name = ?",
+              ["helper_function"]
+          )
+          row = cursor.fetchone()
+          assert row is not None, "helper_function not found"
+
+          file_path = PROJECT_ROOT / row["file_path"]
+          assert file_path.exists(), f"File not found: {row['file_path']}"
+
+          lines = file_path.read_text(encoding="utf-8").splitlines()
+          start_line = row["line_number"]
+          end_line = row["end_line_number"]
+
+          assert end_line is not None, "end_line_number should not be None"
+          content_lines = lines[start_line - 1:end_line]
+          content = "\n".join(content_lines)
+
+          assert "def helper_function" in content, "Content should include function definition"
+          assert "return x + y" in content, "Content should include function body"
+          print(f"get_symbol_content test passed!")
+          print(f"Retrieved {len(content_lines)} lines for helper_function")
+
+          conn.close()
           EOF
 
       - name: Test incremental update
