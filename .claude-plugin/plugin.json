@@ -1,6 +1,6 @@
 {
   "name": "context-tools",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Context management tools for Claude Code: project manifest, repo map with duplicate detection, and learnings system",
   "author": {
     "name": "Robert Taylor"
@@ -10,7 +10,7 @@
   "mcpServers": {
     "repo-map": {
       "command": "uv",
-      "args": ["run", "${CLAUDE_PLUGIN_ROOT}/servers/repo-map-server.py"],
+      "args": ["run", "--locked", "--project", "${CLAUDE_PLUGIN_ROOT}", "${CLAUDE_PLUGIN_ROOT}/servers/repo-map-server.py"],
       "env": {
         "PROJECT_ROOT": "${PWD}"
       }
