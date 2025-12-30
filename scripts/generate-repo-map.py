@@ -36,7 +36,7 @@ from tree_sitter import Language, Parser, Node
 
 
 # Cache format version - bump when Symbol structure or file selection changes
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 
 # Default to 50% of available cores for parsing, max 8 workers
 # Using threads (not processes) to avoid memory duplication
@@ -53,6 +53,7 @@ class Symbol:
     docstring: str | None
     file_path: str
     line_number: int
+    end_line_number: int | None = None  # End line for content extraction
     parent: str | None = None
 
     @property
@@ -288,6 +289,7 @@ def extract_symbols_from_python(file_path: Path, relative_to: Path) -> list[Symb
                 docstring=get_first_line_of_docstring(ast.get_docstring(node)),
                 file_path=rel_path,
                 line_number=node.lineno,
+                end_line_number=node.end_lineno,
             ))
             for item in node.body:
                 if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -298,6 +300,7 @@ def extract_symbols_from_python(file_path: Path, relative_to: Path) -> list[Symb
                         docstring=get_first_line_of_docstring(ast.get_docstring(item)),
                         file_path=rel_path,
                         line_number=item.lineno,
+                        end_line_number=item.end_lineno,
                         parent=node.name,
                     ))
 
@@ -310,6 +313,7 @@ def extract_symbols_from_python(file_path: Path, relative_to: Path) -> list[Symb
                 docstring=get_first_line_of_docstring(ast.get_docstring(node)),
                 file_path=rel_path,
                 line_number=node.lineno,
+                end_line_number=node.end_lineno,
             ))
 
     return symbols
@@ -405,6 +409,7 @@ def extract_symbols_from_cpp(file_path: Path, relative_to: Path) -> list[Symbol]
                     docstring=doc,
                     file_path=rel_path,
                     line_number=node.start_point[0] + 1,
+                    end_line_number=node.end_point[0] + 1,
                 ))
                 # Process children with this class as context
                 for child in reversed(node.children):
@@ -425,6 +430,7 @@ def extract_symbols_from_cpp(file_path: Path, relative_to: Path) -> list[Symbol]
                     docstring=doc,
                     file_path=rel_path,
                     line_number=node.start_point[0] + 1,
+                    end_line_number=node.end_point[0] + 1,
                 ))
                 for child in reversed(node.children):
                     stack.append((child, name))
@@ -446,6 +452,7 @@ def extract_symbols_from_cpp(file_path: Path, relative_to: Path) -> list[Symbol]
                         docstring=doc,
                         file_path=rel_path,
                         line_number=node.start_point[0] + 1,
+                        end_line_number=node.end_point[0] + 1,
                         parent=class_context,
                     ))
                 else:
@@ -456,6 +463,7 @@ def extract_symbols_from_cpp(file_path: Path, relative_to: Path) -> list[Symbol]
                         docstring=doc,
                         file_path=rel_path,
                         line_number=node.start_point[0] + 1,
+                        end_line_number=node.end_point[0] + 1,
                     ))
 
         # Method declaration in class (prototype)
@@ -472,6 +480,7 @@ def extract_symbols_from_cpp(file_path: Path, relative_to: Path) -> list[Symbol]
                         docstring=doc,
                         file_path=rel_path,
                         line_number=node.start_point[0] + 1,
+                        end_line_number=node.end_point[0] + 1,
                         parent=class_context,
                     ))
 
@@ -528,6 +537,7 @@ def extract_symbols_from_rust(file_path: Path, relative_to: Path) -> list[Symbol
                     docstring=doc,
                     file_path=rel_path,
                     line_number=node.start_point[0] + 1,
+                    end_line_number=node.end_point[0] + 1,
                 ))
 
         # Enum
@@ -543,6 +553,7 @@ def extract_symbols_from_rust(file_path: Path, relative_to: Path) -> list[Symbol
                     docstring=doc,
                     file_path=rel_path,
                     line_number=node.start_point[0] + 1,
+                    end_line_number=node.end_point[0] + 1,
                 ))
 
         # Impl block
@@ -575,6 +586,7 @@ def extract_symbols_from_rust(file_path: Path, relative_to: Path) -> list[Symbol
                         docstring=doc,
                         file_path=rel_path,
                         line_number=node.start_point[0] + 1,
+                        end_line_number=node.end_point[0] + 1,
                         parent=impl_context,
                     ))
                 else:
@@ -585,6 +597,7 @@ def extract_symbols_from_rust(file_path: Path, relative_to: Path) -> list[Symbol
                         docstring=doc,
                         file_path=rel_path,
                         line_number=node.start_point[0] + 1,
+                        end_line_number=node.end_point[0] + 1,
                     ))
 
         # Add children to stack
@@ -733,6 +746,7 @@ def write_symbols_to_sqlite(symbols: list[Symbol], db_path: Path) -> None:
             docstring TEXT,
             file_path TEXT NOT NULL,
             line_number INTEGER NOT NULL,
+            end_line_number INTEGER,
             parent TEXT
         )
     """)
@@ -746,9 +760,9 @@ def write_symbols_to_sqlite(symbols: list[Symbol], db_path: Path) -> None:
     conn.execute("DELETE FROM symbols")
 
     conn.executemany(
-        """INSERT INTO symbols (name, kind, signature, docstring, file_path, line_number, parent)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        [(s.name, s.kind, s.signature, s.docstring, s.file_path, s.line_number, s.parent) for s in symbols]
+        """INSERT INTO symbols (name, kind, signature, docstring, file_path, line_number, end_line_number, parent)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        [(s.name, s.kind, s.signature, s.docstring, s.file_path, s.line_number, s.end_line_number, s.parent) for s in symbols]
     )
 
     conn.commit()
