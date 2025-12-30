@@ -5,17 +5,20 @@ Regenerate the repo map for this project to understand the code structure, find 
 Run this command to regenerate:
 
 ```bash
-# Kill any existing repo-map process
+# Kill any existing repo-map process and force-remove lock
 LOCK_FILE=".claude/repo-map-cache.lock"
 if [[ -f "${LOCK_FILE}" ]]; then
     OLD_PID=$(cat "${LOCK_FILE}" 2>/dev/null)
-    if [[ -n "${OLD_PID}" ]] && kill -0 "${OLD_PID}" 2>/dev/null; then
+    if [[ -n "${OLD_PID}" ]]; then
         echo "Stopping existing repo-map process (PID ${OLD_PID})..."
-        kill "${OLD_PID}" 2>/dev/null
+        kill "${OLD_PID}" 2>/dev/null || true
         sleep 1
+        # Force kill if still running
+        kill -9 "${OLD_PID}" 2>/dev/null || true
     fi
-    rm -f "${LOCK_FILE}"
 fi
+# Always remove lock to ensure clean start
+rm -f "${LOCK_FILE}"
 
 # Run any cache format migrations (clears cache if incompatible version)
 python3 -c "
