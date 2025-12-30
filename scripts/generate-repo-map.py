@@ -37,13 +37,10 @@ from tree_sitter import Language, Parser, Node
 # Cache format version - bump when Symbol structure or file selection changes
 CACHE_VERSION = 2
 
-# Default to 25% of available cores for parsing, max 4 workers
+# Default to 50% of available cores for parsing, max 8 workers
 # Using threads (not processes) to avoid memory duplication
-DEFAULT_WORKERS_PERCENT = 25
-MAX_WORKERS = 4
-
-# Use sequential parsing for codebases with more files than this
-SEQUENTIAL_THRESHOLD = 500
+DEFAULT_WORKERS_PERCENT = 50
+MAX_WORKERS = 8
 
 
 @dataclass
@@ -1003,11 +1000,8 @@ def main():
             # Calculate update interval for ~10% progress updates
             update_interval = max(1, len(files_to_parse) // 20)  # Update ~20 times = every 5%
 
-            # Use sequential for very large codebases to avoid memory issues
-            use_parallel = num_workers > 1 and len(files_to_parse) > 10 and len(files_to_parse) <= SEQUENTIAL_THRESHOLD
-
-            if use_parallel:
-                # Parallel parsing with threads (not processes) to share memory
+            if num_workers > 1 and len(files_to_parse) > 10:
+                # Parallel parsing with threads (shares memory, safe for large codebases)
                 print(f"Parsing {len(files_to_parse)} files with {num_workers} threads...")
                 with ThreadPoolExecutor(max_workers=num_workers) as executor:
                     futures = {executor.submit(parse_file_worker, args): args for args in files_to_parse}
@@ -1027,9 +1021,7 @@ def main():
                         except Exception as e:
                             print(f"  Error parsing file: {e}")
             else:
-                # Sequential parsing for small codebases or large ones (to avoid memory issues)
-                if len(files_to_parse) > SEQUENTIAL_THRESHOLD:
-                    print(f"Parsing {len(files_to_parse)} files sequentially (large codebase)...")
+                # Sequential parsing for small number of files
                 completed = 0
                 for args in files_to_parse:
                     rel_path, mtime, content_hash, symbol_dicts, lang = parse_file_worker(args)
@@ -1041,8 +1033,6 @@ def main():
                     completed += 1
                     if completed % update_interval == 0 or completed == len(files_to_parse):
                         update_progress("parsing", completed, len(files_to_parse), len(all_symbols))
-                        if len(files_to_parse) > SEQUENTIAL_THRESHOLD:
-                            print(f"  Parsed {completed}/{len(files_to_parse)} files...")
 
         # Remove deleted files from cache
         cache.remove_stale(all_rel_paths)
