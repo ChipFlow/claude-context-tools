@@ -64,63 +64,22 @@ claude --plugin-dir ./claude-context-tools
 
 ### Configuring the MCP Server (Required)
 
-After installing the plugin, you need to configure the MCP server in your global Claude Code settings for symbol search tools to work:
-
-**Add to `~/.claude/claude.json`:**
-
-```json
-{
-  "mcpServers": {
-    "repo-map": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--project",
-        "${HOME}/.claude/plugins/cache/chipflow-context-tools/context-tools/0.6.0",
-        "${HOME}/.claude/plugins/cache/chipflow-context-tools/context-tools/0.6.0/servers/repo-map-server.py"
-      ],
-      "env": {
-        "PROJECT_ROOT": "${PWD}"
-      }
-    }
-  }
-}
-```
-
-**Or run this command to add it automatically:**
+After installing the plugin, configure the MCP server globally for fast symbol search across all projects:
 
 ```bash
-python3 << 'EOF'
-import json
-from pathlib import Path
-
-config_path = Path.home() / ".claude" / "claude.json"
-config = json.loads(config_path.read_text())
-
-if "mcpServers" not in config:
-    config["mcpServers"] = {}
-
-config["mcpServers"]["repo-map"] = {
-    "command": "uv",
-    "args": [
-        "run",
-        "--project",
-        "${HOME}/.claude/plugins/cache/chipflow-context-tools/context-tools/0.6.0",
-        "${HOME}/.claude/plugins/cache/chipflow-context-tools/context-tools/0.6.0/servers/repo-map-server.py"
-    ],
-    "env": {
-        "PROJECT_ROOT": "${PWD}"
-    }
-}
-
-config_path.write_text(json.dumps(config, indent=2))
-print("✓ MCP server configured")
-EOF
+claude mcp add --scope user --transport stdio repo-map \
+  --env PROJECT_ROOT='${PWD}' \
+  -- uv run --project ~/.claude/plugins/cache/chipflow-context-tools/context-tools/0.6.0 \
+     ~/.claude/plugins/cache/chipflow-context-tools/context-tools/0.6.0/servers/repo-map-server.py
 ```
 
-**Note:** Update the version number (`0.6.0`) when you update the plugin.
+**Note:** Update the version number (`0.6.0`) when you update the plugin, or use `claude mcp remove repo-map` then re-add.
 
-After configuration, restart Claude Code. Run `/mcp` to verify the `repo-map` server is loaded.
+After configuration, restart Claude Code. Verify with:
+```bash
+claude mcp list
+# Should show: repo-map: ... - ✓ Connected
+```
 
 ## Requirements
 
