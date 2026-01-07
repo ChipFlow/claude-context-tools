@@ -252,6 +252,27 @@ To add support for a new language:
 4. Update `parse_file_worker()` to handle the new language
 5. Add tests in the CI workflow
 
+## Uninstalling
+
+To completely remove the plugin:
+
+1. **Remove the MCP server:**
+```bash
+claude mcp remove repo-map
+```
+
+2. **Uninstall the plugin:**
+```bash
+claude plugin uninstall context-tools
+```
+
+3. **Clean up generated files** (optional - per project):
+```bash
+rm -rf .claude/repo-map.* .claude/project-manifest.json
+```
+
+Note: `.claude/learnings.md` contains your project insights - consider backing it up before deleting.
+
 ## License
 
 MIT
