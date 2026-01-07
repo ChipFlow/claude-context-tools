@@ -62,6 +62,66 @@ For testing or one-off use:
 claude --plugin-dir ./claude-context-tools
 ```
 
+### Configuring the MCP Server (Required)
+
+After installing the plugin, you need to configure the MCP server in your global Claude Code settings for symbol search tools to work:
+
+**Add to `~/.claude/claude.json`:**
+
+```json
+{
+  "mcpServers": {
+    "repo-map": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--project",
+        "${HOME}/.claude/plugins/cache/chipflow-context-tools/context-tools/0.6.0",
+        "${HOME}/.claude/plugins/cache/chipflow-context-tools/context-tools/0.6.0/servers/repo-map-server.py"
+      ],
+      "env": {
+        "PROJECT_ROOT": "${PWD}"
+      }
+    }
+  }
+}
+```
+
+**Or run this command to add it automatically:**
+
+```bash
+python3 << 'EOF'
+import json
+from pathlib import Path
+
+config_path = Path.home() / ".claude" / "claude.json"
+config = json.loads(config_path.read_text())
+
+if "mcpServers" not in config:
+    config["mcpServers"] = {}
+
+config["mcpServers"]["repo-map"] = {
+    "command": "uv",
+    "args": [
+        "run",
+        "--project",
+        "${HOME}/.claude/plugins/cache/chipflow-context-tools/context-tools/0.6.0",
+        "${HOME}/.claude/plugins/cache/chipflow-context-tools/context-tools/0.6.0/servers/repo-map-server.py"
+    ],
+    "env": {
+        "PROJECT_ROOT": "${PWD}"
+    }
+}
+
+config_path.write_text(json.dumps(config, indent=2))
+print("✓ MCP server configured")
+EOF
+```
+
+**Note:** Update the version number (`0.6.0`) when you update the plugin.
+
+After configuration, restart Claude Code. Run `/mcp` to verify the `repo-map` server is loaded.
+
 ## Requirements
 
 - [uv](https://docs.astral.sh/uv/) - Python package manager (for running scripts)
@@ -82,6 +142,18 @@ The plugin registers two hooks:
    - Regenerates the project manifest
    - Updates the repository map
    - Reminds you to save important discoveries
+
+### MCP Tools (Fast Symbol Lookup)
+
+Once the MCP server is configured, Claude has access to these fast symbol search tools:
+
+- `search_symbols` - Find functions/classes/methods by glob pattern (e.g., `get_*`, `*Handler`)
+- `get_file_symbols` - List all symbols defined in a specific file
+- `get_symbol_content` - Get full source code of a symbol by exact name
+- `reindex_repo_map` - Trigger manual reindex if files changed
+- `repo_map_status` - Check indexing status and staleness
+
+These tools use a pre-built SQLite index, making them **much faster than Grep** for finding code symbols.
 
 ### Slash Commands
 
@@ -116,6 +188,7 @@ The plugin creates files in your project's `.claude/` directory:
 .claude/
 ├── project-manifest.json   # Build system, languages, entry points
 ├── repo-map.md             # Code structure with similarity analysis
+├── repo-map.db             # SQLite database for fast symbol lookups (MCP server)
 ├── repo-map-cache.json     # Symbol cache for incremental updates
 └── learnings.md            # Project-specific learnings
 ```
