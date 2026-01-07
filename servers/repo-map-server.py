@@ -160,6 +160,12 @@ def check_subprocess_exit_status():
         # Process has exited - check exit status
         returncode = proc.returncode
 
+        # Exit code 0 = success (or concurrent indexer - SQLite handles concurrency)
+        if returncode == 0:
+            logger.info(f"Indexing subprocess completed successfully (PID: {proc.pid})")
+            _indexing_process = None
+            return
+
         # Check for resource limit signals (Unix)
         if returncode < 0:
             signal_num = -returncode

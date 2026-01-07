@@ -736,10 +736,8 @@ def set_metadata(conn: sqlite3.Connection, key: str, value: str) -> None:
 
 def write_symbols_to_sqlite(symbols: list[Symbol], db_path: Path) -> None:
     """Write symbols to SQLite database for MCP server queries."""
-    # Write to temp file then rename for atomicity
-    tmp_path = db_path.with_suffix(".tmp")
-
-    conn = sqlite3.connect(tmp_path)
+    # Connect directly - SQLite WAL mode + transactions handle atomicity and concurrency
+    conn = sqlite3.connect(db_path, timeout=30.0)
     conn.execute("PRAGMA journal_mode=WAL")
 
     # Create tables outside transaction (DDL)
@@ -792,27 +790,6 @@ def write_symbols_to_sqlite(symbols: list[Symbol], db_path: Path) -> None:
         raise
     finally:
         conn.close()
-
-    # Safety check: don't overwrite if watchdog marked us as failed
-    # This prevents hung processes from overwriting the database after watchdog intervention
-    if db_path.exists():
-        check_conn = sqlite3.connect(db_path, timeout=1.0)
-        try:
-            cursor = check_conn.execute("SELECT value FROM metadata WHERE key = 'status'")
-            current_status = cursor.fetchone()
-            if current_status and current_status[0] == 'failed':
-                # Watchdog or error handler marked this as failed - don't overwrite
-                check_conn.close()
-                tmp_path.unlink()  # Clean up temp file
-                raise RuntimeError("Indexing was marked as failed by watchdog - aborting to prevent overwrite")
-        except sqlite3.OperationalError:
-            # No metadata table - safe to proceed
-            pass
-        finally:
-            check_conn.close()
-
-    # Atomic rename - only happens if transaction committed successfully and not marked failed
-    tmp_path.rename(db_path)
 
 
 def format_repo_map(symbols: list[Symbol], similar_classes: list, similar_functions: list, doc_coverage: dict, root: Path) -> str:
@@ -995,7 +972,10 @@ def main():
     claude_dir.mkdir(exist_ok=True)
     db_path = claude_dir / "repo-map.db"
 
-    # Set status to 'indexing' at start - create temp DB if needed
+    # Set status to 'indexing' at start
+    # SQLite with WAL mode + transactions handles concurrent access
+    # - Multiple readers can read while one writer writes
+    # - SQLite's built-in locking prevents concurrent writers
     if db_path.exists():
         # Update existing DB
         conn = sqlite3.connect(db_path)
