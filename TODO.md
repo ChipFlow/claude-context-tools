@@ -23,6 +23,17 @@
 - Database metadata correctly tracks status
 - Watchdog can kill hung subprocess without affecting MCP server
 
+**Resource Limits** (v0.8.0):
+- Added `setrlimit` on Unix/macOS to catch runaway resource usage
+- Memory limit: 4GB virtual address space (catches pathological allocation issues)
+- CPU time limit: 20 minutes (catches infinite loops in parsing)
+- Automatic detection and logging:
+  - SIGXCPU: CPU time limit exceeded
+  - SIGSEGV: Possible memory limit exceeded
+  - SIGKILL: Process was killed by watchdog
+- Checked on startup and every 60 seconds
+- Normal indexing unaffected by generous limits
+
 ---
 
 ## ✅ COMPLETED: Indexing Status and Wait Support (v0.7.0 - v0.7.1)

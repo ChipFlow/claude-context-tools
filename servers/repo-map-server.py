@@ -21,6 +21,7 @@ import hashlib
 import json
 import logging
 import os
+import resource
 import signal
 import sqlite3
 import subprocess
@@ -76,6 +77,28 @@ _last_index_time = 0
 _index_error: str | None = None
 
 
+def set_subprocess_limits():
+    """
+    Set resource limits for indexing subprocess (Unix only).
+    Called via preexec_fn in subprocess.Popen.
+    """
+    try:
+        # Limit memory to 4GB (generous, catches runaway allocations)
+        # RLIMIT_AS = virtual memory address space
+        memory_limit = 4 * 1024 * 1024 * 1024  # 4GB in bytes
+        resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
+    except (ValueError, OSError, AttributeError) as e:
+        # May fail on some systems or if resource module unavailable
+        pass
+
+    try:
+        # Limit CPU time to 20 minutes (watchdog catches at 10 min wall-clock time)
+        cpu_time_limit = 1200  # 20 minutes in seconds
+        resource.setrlimit(resource.RLIMIT_CPU, (cpu_time_limit, cpu_time_limit))
+    except (ValueError, OSError, AttributeError):
+        pass
+
+
 def get_db() -> sqlite3.Connection:
     """Get a database connection with row factory."""
     if not DB_PATH.exists():
@@ -88,6 +111,44 @@ def get_db() -> sqlite3.Connection:
 def row_to_dict(row: sqlite3.Row) -> dict:
     """Convert a sqlite3.Row to a dictionary."""
     return {key: row[key] for key in row.keys()}
+
+
+def check_subprocess_exit_status():
+    """
+    Check if indexing subprocess has exited and log resource limit issues.
+    Called periodically to detect and log resource limit exceeded conditions.
+    """
+    global _indexing_process
+
+    with _indexing_lock:
+        if _indexing_process is None:
+            return
+
+        proc = _indexing_process
+        if proc.poll() is None:
+            # Still running
+            return
+
+        # Process has exited - check exit status
+        returncode = proc.returncode
+
+        # Check for resource limit signals (Unix)
+        if returncode < 0:
+            signal_num = -returncode
+            if signal_num == signal.SIGXCPU:
+                logger.error(f"Indexing subprocess (PID: {proc.pid}) exceeded CPU time limit (SIGXCPU)")
+            elif signal_num == signal.SIGSEGV:
+                # SIGSEGV can be caused by RLIMIT_AS exceeded
+                logger.error(f"Indexing subprocess (PID: {proc.pid}) crashed (SIGSEGV) - possibly memory limit exceeded")
+            elif signal_num == signal.SIGKILL:
+                logger.warning(f"Indexing subprocess (PID: {proc.pid}) was killed (SIGKILL)")
+            else:
+                logger.warning(f"Indexing subprocess (PID: {proc.pid}) exited with signal {signal_num}")
+        elif returncode > 0:
+            logger.error(f"Indexing subprocess (PID: {proc.pid}) exited with error code {returncode}")
+
+        # Clean up reference
+        _indexing_process = None
 
 
 def check_indexing_watchdog():
@@ -205,12 +266,13 @@ def do_index() -> tuple[bool, str]:
         # Ensure .claude directory exists
         CLAUDE_DIR.mkdir(exist_ok=True)
 
-        # Spawn subprocess to run the indexer
+        # Spawn subprocess to run the indexer with resource limits
         proc = subprocess.Popen(
             ["uv", "run", str(SCRIPT_DIR / "generate-repo-map.py"), str(PROJECT_ROOT)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            preexec_fn=set_subprocess_limits,  # Set resource limits (Unix only)
         )
 
         with _indexing_lock:
@@ -631,10 +693,13 @@ async def periodic_staleness_check():
 
 
 async def periodic_watchdog_check():
-    """Run watchdog every 60 seconds to detect hung indexing."""
+    """Run watchdog every 60 seconds to detect hung indexing and resource limit issues."""
     while True:
         await asyncio.sleep(60)
         try:
+            # Check for completed subprocess and log resource limit issues
+            check_subprocess_exit_status()
+            # Check for hung processes
             check_indexing_watchdog()
         except Exception as e:
             logger.warning(f"Watchdog check failed: {e}")
@@ -644,6 +709,7 @@ async def main():
     """Run the MCP server."""
     # Run watchdog on startup to detect any stuck state
     try:
+        check_subprocess_exit_status()
         check_indexing_watchdog()
     except Exception as e:
         logger.warning(f"Startup watchdog check failed: {e}")
