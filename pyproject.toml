@@ -1,6 +1,6 @@
 [project]
 name = "claude-context-tools"
-version = "0.6.0"
+version = "0.6.1"
 description = "Context management tools for Claude Code: project manifest, repo map with duplicate detection, and learnings system"
 readme = "README.md"
 license = "MIT"

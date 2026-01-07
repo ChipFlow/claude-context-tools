@@ -64,16 +64,17 @@ claude --plugin-dir ./claude-context-tools
 
 ### Configuring the MCP Server (Required)
 
-After installing the plugin, configure the MCP server globally for fast symbol search across all projects:
+The plugin includes MCP server configuration in its manifest, which *should* configure automatically. However, if the MCP server doesn't load after installing and restarting Claude Code, configure it manually:
+
+**Manual configuration (if auto-config doesn't work):**
 
 ```bash
 claude mcp add --scope user --transport stdio repo-map \
   --env PROJECT_ROOT='${PWD}' \
-  -- uv run --project ~/.claude/plugins/cache/chipflow-context-tools/context-tools/0.6.0 \
-     ~/.claude/plugins/cache/chipflow-context-tools/context-tools/0.6.0/servers/repo-map-server.py
+  -- uv run ~/.claude/plugins/cache/chipflow-context-tools/context-tools/0.6.1/servers/repo-map-server.py
 ```
 
-**Note:** Update the version number (`0.6.0`) when you update the plugin, or use `claude mcp remove repo-map` then re-add.
+**Note:** Update the version number (`0.6.1`) when you update the plugin, or use `claude mcp remove repo-map` then re-add.
 
 After configuration, restart Claude Code. Verify with:
 ```bash

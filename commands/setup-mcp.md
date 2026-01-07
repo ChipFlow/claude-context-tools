@@ -27,8 +27,7 @@ PLUGIN_VERSION=$(python3 -c "import json; print(json.load(open('${HOME}/.claude/
 ```bash
 claude mcp add --scope user --transport stdio repo-map \
   --env PROJECT_ROOT='${PWD}' \
-  -- uv run --project "${HOME}/.claude/plugins/cache/chipflow-context-tools/context-tools/${PLUGIN_VERSION}" \
-     "${HOME}/.claude/plugins/cache/chipflow-context-tools/context-tools/${PLUGIN_VERSION}/servers/repo-map-server.py"
+  -- uv run "${HOME}/.claude/plugins/cache/chipflow-context-tools/context-tools/${PLUGIN_VERSION}/servers/repo-map-server.py"
 ```
 
 3. Verify it's configured:
