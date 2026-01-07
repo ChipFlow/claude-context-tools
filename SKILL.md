@@ -12,6 +12,17 @@ This skill provides intelligent context management for large codebases through:
 - **MCP Symbol Server**: Enables fast symbol search via `search_symbols` and `get_file_symbols` tools
 - **Automatic Indexing**: Background incremental updates as files change
 
+## Using MCP Tools
+
+**IMPORTANT**: Before attempting to use MCP tools (mcp__plugin_context-tools_repo-map__*), check if `.claude/repo-map.db` exists:
+- If YES: Try the MCP tool. If it fails (not available), use sqlite3 fallback.
+- If NO: The project hasn't been indexed yet. Either wait for indexing or run `/context-tools:repo-map` to generate it.
+
+**Preferred approach when MCP tools are available:**
+1. Try MCP tool first
+2. If tool not found, explain that session needs restart to load MCP server
+3. Use sqlite3 fallback to still answer the question
+
 ## First Time Setup
 
 **IMPORTANT**: If the user has just installed this plugin:
@@ -32,11 +43,25 @@ The MCP server auto-configures from the plugin manifest. Only if auto-config fai
 Note: Indexing is now handled by the MCP server itself (no PreToolUse hook needed).
 
 ### MCP Server (repo-map)
-- `search_symbols(pattern, kind?, limit?)` - Search symbols by name pattern (supports glob wildcards)
-- `get_file_symbols(file)` - Get all symbols in a specific file
-- `get_symbol_content(name, kind?)` - Get full source code of a symbol by exact name
-- `reindex_repo_map(force?)` - Trigger manual reindex
-- `repo_map_status()` - Check indexing status and staleness
+
+**Tool names (when available):**
+- `mcp__plugin_context-tools_repo-map__search_symbols` - Search symbols by pattern (supports glob wildcards)
+- `mcp__plugin_context-tools_repo-map__get_file_symbols` - Get all symbols in a specific file
+- `mcp__plugin_context-tools_repo-map__get_symbol_content` - Get full source code of a symbol by exact name
+- `mcp__plugin_context-tools_repo-map__reindex_repo_map` - Trigger manual reindex
+- `mcp__plugin_context-tools_repo-map__repo_map_status` - Check indexing status and staleness
+
+**When MCP tools are NOT available:**
+- Current session started before plugin was installed/updated
+- User hasn't restarted Claude Code yet
+
+**Fallback behavior:**
+If MCP tools aren't available, use sqlite3 directly:
+```bash
+sqlite3 .claude/repo-map.db "SELECT name, kind, signature, file_path, line_number FROM symbols WHERE name LIKE 'pattern%' LIMIT 20"
+```
+
+Or tell the user to restart Claude Code to load the MCP server.
 
 ### Slash Commands
 - `/context-tools:repo-map` - Regenerate repository map
