@@ -54,10 +54,83 @@ CREATE TABLE metadata (
 - Can show progress during long indexing
 - Can detect and recover from hung indexing
 
+### Watchdog for Recovery
+
+**Problem**: Indexing can crash/hang leaving status stuck at 'indexing'
+
+**Solution**: Add watchdog logic in MCP server
+
+```python
+def check_indexing_watchdog():
+    """Check if indexing is stuck and reset if needed."""
+    if not DB_PATH.exists():
+        return
+
+    try:
+        conn = get_db()
+        cursor = conn.execute("SELECT value FROM metadata WHERE key = ?", ["status"])
+        row = cursor.fetchone()
+
+        if row and row[0] == "indexing":
+            # Check how long it's been indexing
+            cursor = conn.execute("SELECT value FROM metadata WHERE key = ?", ["index_start_time"])
+            start_row = cursor.fetchone()
+
+            if start_row:
+                start_time = datetime.fromisoformat(start_row[0])
+                elapsed = (datetime.now() - start_time).total_seconds()
+
+                # If indexing for > 10 minutes, assume it crashed
+                if elapsed > 600:
+                    logger.warning(f"Indexing stuck for {elapsed}s, resetting status")
+                    conn.execute("UPDATE metadata SET value = ? WHERE key = ?", ["failed", "status"])
+                    conn.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+                                ["error_message", f"Indexing hung/crashed after {elapsed}s"])
+                    conn.commit()
+
+        conn.close()
+    except Exception as e:
+        logger.error(f"Watchdog check failed: {e}")
+
+# Run watchdog on server startup
+async def main():
+    check_indexing_watchdog()  # Check for stuck indexing
+
+    # Start periodic staleness checker
+    asyncio.create_task(periodic_staleness_check())
+    asyncio.create_task(periodic_watchdog_check())  # New: periodic watchdog
+
+    async with stdio_server() as (read_stream, write_stream):
+        await app.run(read_stream, write_stream, app.create_initialization_options())
+
+async def periodic_watchdog_check():
+    """Run watchdog every 60 seconds to detect hung indexing."""
+    while True:
+        await asyncio.sleep(60)
+        try:
+            check_indexing_watchdog()
+        except Exception as e:
+            logger.warning(f"Watchdog check failed: {e}")
+```
+
+**Watchdog Features:**
+- Runs on MCP server startup
+- Runs periodically (every 60 seconds)
+- Detects indexing stuck > 10 minutes
+- Resets status to 'failed' with error message
+- Allows recovery by triggering new index
+
+**Edge Cases Handled:**
+1. **Crash during indexing**: Watchdog detects and resets
+2. **Multiple concurrent indexing**: Lock in do_index() prevents this
+3. **Partial index left behind**: Status='failed' triggers fresh reindex
+4. **Zombie processes**: Session start hook already kills them
+
 ### Migration
 - Bump CACHE_VERSION to 4
 - Create metadata table if not exists
 - Set initial status based on symbol count
+- Run watchdog on first load to detect any stuck state
 
 ---
 
