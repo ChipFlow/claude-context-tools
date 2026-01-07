@@ -10,7 +10,7 @@
 # ///
 """
 MCP server for querying repo-map symbol data.
-Handles indexing internally - no subprocess spawning.
+Spawns indexing subprocess - watchdog can kill hung processes.
 
 Exposes tools to search symbols by name/pattern, get file symbols, and trigger reindex.
 """
@@ -21,7 +21,9 @@ import hashlib
 import json
 import logging
 import os
+import signal
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -67,9 +69,9 @@ logger = logging.getLogger(__name__)
 
 app = Server("context-tools-repo-map")
 
-# Indexing state
+# Indexing state - now using subprocess instead of threads
 _indexing_lock = threading.Lock()
-_is_indexing = False
+_indexing_process: subprocess.Popen | None = None  # Current indexing subprocess
 _last_index_time = 0
 _index_error: str | None = None
 
@@ -89,7 +91,9 @@ def row_to_dict(row: sqlite3.Row) -> dict:
 
 
 def check_indexing_watchdog():
-    """Check if indexing is stuck and reset if needed."""
+    """Check if indexing is stuck and KILL the hung subprocess."""
+    global _indexing_process
+
     if not DB_PATH.exists():
         return
 
@@ -108,13 +112,29 @@ def check_indexing_watchdog():
                     start_time = datetime.fromisoformat(start_time_str)
                     elapsed = (datetime.now() - start_time).total_seconds()
 
-                    # If indexing for > 10 minutes, assume it crashed
+                    # If indexing for > 10 minutes, kill the subprocess
                     if elapsed > 600:
-                        logger.warning(f"Indexing stuck for {elapsed}s, resetting status")
+                        logger.warning(f"Indexing stuck for {elapsed}s, killing subprocess")
+
+                        # Mark database as failed
                         conn.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", ["status", "failed"])
                         conn.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
-                                   ["error_message", f"Indexing hung/crashed after {elapsed}s"])
+                                   ["error_message", f"Watchdog killed hung indexer after {elapsed:.0f}s"])
                         conn.commit()
+
+                        # KILL the hung subprocess (key improvement!)
+                        with _indexing_lock:
+                            if _indexing_process and _indexing_process.poll() is None:
+                                # Process still running - kill it
+                                pid = _indexing_process.pid
+                                try:
+                                    os.kill(pid, signal.SIGKILL)
+                                    logger.warning(f"Killed hung indexer subprocess PID {pid}")
+                                    _indexing_process.wait(timeout=5)  # Clean up zombie
+                                except (ProcessLookupError, subprocess.TimeoutExpired):
+                                    pass  # Already dead or still zombie
+                                finally:
+                                    _indexing_process = None
                 except ValueError:
                     pass  # Invalid timestamp format
 
@@ -169,128 +189,48 @@ def is_stale() -> tuple[bool, str]:
 
 def do_index() -> tuple[bool, str]:
     """
-    Perform indexing synchronously.
+    Spawn subprocess to perform indexing.
     Returns (success, message).
     """
-    global _is_indexing, _last_index_time, _index_error
+    global _indexing_process, _last_index_time, _index_error
 
     with _indexing_lock:
-        if _is_indexing:
+        if _indexing_process and _indexing_process.poll() is None:
             return False, "indexing already in progress"
-        _is_indexing = True
         _index_error = None
 
     try:
-        logger.info(f"Starting index of {PROJECT_ROOT}")
-        indexer = get_indexer()
+        logger.info(f"Starting index subprocess for {PROJECT_ROOT}")
 
         # Ensure .claude directory exists
         CLAUDE_DIR.mkdir(exist_ok=True)
 
-        # Find all source files
-        python_files = indexer.find_python_files(PROJECT_ROOT)
-        cpp_files = indexer.find_cpp_files(PROJECT_ROOT)
-        rust_files = indexer.find_rust_files(PROJECT_ROOT)
+        # Spawn subprocess to run the indexer
+        proc = subprocess.Popen(
+            ["uv", "run", str(SCRIPT_DIR / "generate-repo-map.py"), str(PROJECT_ROOT)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
 
-        total_files = len(python_files) + len(cpp_files) + len(rust_files)
-        if total_files == 0:
-            with _indexing_lock:
-                _is_indexing = False
-            return False, f"no source files found in {PROJECT_ROOT}"
-
-        # Load symbol cache
-        cache = indexer.SymbolCache(CACHE_PATH)
-
-        all_symbols = []
-        all_rel_paths = set()
-
-        # Process each language
-        for file_path in python_files:
-            rel_path = str(file_path.relative_to(PROJECT_ROOT))
-            all_rel_paths.add(rel_path)
-            symbols, was_cached = cache.get_symbols(file_path, rel_path)
-            if was_cached:
-                all_symbols.extend(symbols)
-            else:
-                symbols = indexer.extract_symbols_from_python(file_path, PROJECT_ROOT)
-                all_symbols.extend(symbols)
-                try:
-                    mtime = file_path.stat().st_mtime
-                    content_hash = indexer.compute_file_hash(file_path)
-                    cache.update(rel_path, mtime, content_hash, symbols)
-                except IOError:
-                    pass
-
-        for file_path in cpp_files:
-            rel_path = str(file_path.relative_to(PROJECT_ROOT))
-            all_rel_paths.add(rel_path)
-            symbols, was_cached = cache.get_symbols(file_path, rel_path)
-            if was_cached:
-                all_symbols.extend(symbols)
-            else:
-                symbols = indexer.extract_symbols_from_cpp(file_path, PROJECT_ROOT)
-                all_symbols.extend(symbols)
-                try:
-                    mtime = file_path.stat().st_mtime
-                    content_hash = indexer.compute_file_hash(file_path)
-                    cache.update(rel_path, mtime, content_hash, symbols)
-                except IOError:
-                    pass
-
-        for file_path in rust_files:
-            rel_path = str(file_path.relative_to(PROJECT_ROOT))
-            all_rel_paths.add(rel_path)
-            symbols, was_cached = cache.get_symbols(file_path, rel_path)
-            if was_cached:
-                all_symbols.extend(symbols)
-            else:
-                symbols = indexer.extract_symbols_from_rust(file_path, PROJECT_ROOT)
-                all_symbols.extend(symbols)
-                try:
-                    mtime = file_path.stat().st_mtime
-                    content_hash = indexer.compute_file_hash(file_path)
-                    cache.update(rel_path, mtime, content_hash, symbols)
-                except IOError:
-                    pass
-
-        # Remove stale entries and save cache
-        cache.remove_stale(all_rel_paths)
-        cache.save()
-
-        # Write to SQLite
-        indexer.write_symbols_to_sqlite(all_symbols, DB_PATH)
-
-        # Also generate the markdown file for reference
-        similar_classes = indexer.find_similar_classes(all_symbols)
-        similar_functions = indexer.find_similar_functions(all_symbols)
-        doc_coverage = indexer.analyze_documentation_coverage(all_symbols)
-        repo_map = indexer.format_repo_map(all_symbols, similar_classes, similar_functions, doc_coverage, PROJECT_ROOT)
-
-        md_path = CLAUDE_DIR / "repo-map.md"
-        tmp_path = md_path.with_suffix(".md.tmp")
-        tmp_path.write_text(repo_map)
-        tmp_path.rename(md_path)
+        with _indexing_lock:
+            _indexing_process = proc
 
         _last_index_time = time.time()
-        logger.info(f"Indexed {len(all_symbols)} symbols from {total_files} files")
+        logger.info(f"Indexing subprocess started (PID: {proc.pid})")
 
-        with _indexing_lock:
-            _is_indexing = False
-
-        return True, f"indexed {len(all_symbols)} symbols from {total_files} files"
+        return True, f"indexing started in subprocess (PID: {proc.pid})"
 
     except Exception as e:
-        logger.exception("Indexing failed")
+        logger.exception("Failed to start indexing subprocess")
         with _indexing_lock:
-            _is_indexing = False
             _index_error = str(e)
-        return False, f"indexing failed: {e}"
+        return False, f"failed to start indexing: {e}"
 
 
 def index_in_background():
-    """Start indexing in a background thread."""
-    thread = threading.Thread(target=do_index, daemon=True)
-    thread.start()
+    """Start indexing in a background subprocess."""
+    do_index()  # Spawns subprocess, no thread needed
 
 
 @app.list_tools()
@@ -469,11 +409,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     except FileNotFoundError as e:
         # DB doesn't exist - trigger indexing
         stale, reason = is_stale()
-        if stale and not _is_indexing:
+        is_indexing = _indexing_process is not None and _indexing_process.poll() is None
+        if stale and not is_indexing:
             index_in_background()
         return [TextContent(type="text", text=json.dumps({
             "error": str(e),
-            "status": "indexing started in background" if not _is_indexing else "indexing in progress"
+            "status": "indexing started in background" if not is_indexing else "indexing in progress"
         }))]
     except Exception as e:
         return [TextContent(type="text", text=json.dumps({"error": f"Tool error: {e}"}))]
@@ -593,9 +534,9 @@ def get_symbol_content(name: str, kind: str | None = None) -> dict:
 
 def reindex_repo_map(force: bool = False) -> dict:
     """Trigger a reindex of the repository."""
-    global _is_indexing
+    is_indexing = _indexing_process is not None and _indexing_process.poll() is None
 
-    if _is_indexing:
+    if is_indexing:
         return {"status": "indexing already in progress"}
 
     if not force:
@@ -610,10 +551,11 @@ def reindex_repo_map(force: bool = False) -> dict:
 
 def repo_map_status() -> dict:
     """Get current index status."""
+    is_indexing = _indexing_process is not None and _indexing_process.poll() is None
     status = {
         "project_root": str(PROJECT_ROOT),
         "database_exists": DB_PATH.exists(),
-        "is_indexing": _is_indexing,
+        "is_indexing": is_indexing,
     }
 
     if _index_error:
@@ -678,7 +620,8 @@ async def periodic_staleness_check():
     while True:
         await asyncio.sleep(STALENESS_CHECK_INTERVAL)
         try:
-            if not _is_indexing:
+            is_indexing = _indexing_process is not None and _indexing_process.poll() is None
+            if not is_indexing:
                 stale, reason = is_stale()
                 if stale:
                     logger.info(f"Index is stale ({reason}), starting background reindex")

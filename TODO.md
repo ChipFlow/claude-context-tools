@@ -1,15 +1,40 @@
 # TODO: Future Enhancements
 
-## Indexing Status and Wait Support
+## ✅ COMPLETED: Multiprocess Architecture (v0.8.0)
 
-**Status**: High Priority - Needed for reliable tool usage
+**Status**: ✅ COMPLETED in v0.8.0
 
-**Problem**:
-- MCP tools may be called before indexing completes
-- Returns incomplete/empty results on first use
-- No way to check if indexing is done or wait for completion
+**Motivation**: The v0.7.x thread-based architecture had a critical limitation - hung tree-sitter parsing would freeze the entire MCP server process. Multiprocess architecture solves this by spawning a separate subprocess for indexing.
 
-**Solution**: Add metadata table to track indexing status
+**Benefits**:
+- **MCP server always responsive**: Even if indexing hangs, the MCP server remains operational
+- **Watchdog can kill hung processes**: Using SIGKILL on the subprocess doesn't affect MCP server
+- **Clean process isolation**: Each indexing run is independent
+- **SQLite WAL handles concurrent access**: Database can be read while indexing subprocess writes
+
+**Implementation**:
+- Changed `_is_indexing` boolean to `_indexing_process: subprocess.Popen | None`
+- Modified `do_index()` to spawn subprocess: `uv run scripts/generate-repo-map.py`
+- Updated `check_indexing_watchdog()` to kill hung subprocess with SIGKILL
+- All status checks now use `_indexing_process.poll()` to detect running process
+
+**Testing**:
+- Verified subprocess spawning works correctly
+- Database metadata correctly tracks status
+- Watchdog can kill hung subprocess without affecting MCP server
+
+---
+
+## ✅ COMPLETED: Indexing Status and Wait Support (v0.7.0 - v0.7.1)
+
+**Status**: ✅ COMPLETED in v0.7.0 and v0.7.1
+
+**Problem**: (SOLVED)
+- ~~MCP tools may be called before indexing completes~~
+- ~~Returns incomplete/empty results on first use~~
+- ~~No way to check if indexing is done or wait for completion~~
+
+**Solution**: ✅ Implemented metadata table to track indexing status
 
 ### Schema Addition
 
@@ -23,40 +48,41 @@ CREATE TABLE metadata (
 -- Other keys: last_indexed, symbol_count, file_count, index_start_time, error_message
 ```
 
-### Implementation Tasks
+### Implementation Tasks ✅ ALL COMPLETED
 
-1. **generate-repo-map.py**: Update status in metadata table
-   - Set `status='indexing'` at start
-   - Update `file_count` during processing
-   - Set `status='completed'` on success
-   - Set `status='failed'` on error with error_message
+1. ✅ **generate-repo-map.py**: Updated status in metadata table (v0.7.0)
+   - ✅ Set `status='indexing'` at start
+   - ✅ Set `status='completed'` on success
+   - ✅ Set `status='failed'` on error with error_message
+   - ✅ Single transaction for all writes (v0.7.1 - prevents data corruption)
 
-2. **MCP Server - Enhanced status tool**:
-   - Return metadata from database
-   - Show indexing progress (files processed)
-   - Calculate indexing duration
-   - Detect stale/hung indexing
+2. ✅ **MCP Server - Enhanced status tool** (v0.7.0):
+   - ✅ Return metadata from database
+   - ✅ Show indexing progress
+   - ✅ Calculate indexing duration
+   - ✅ Detect stale/hung indexing
 
-3. **MCP Server - Auto-wait behavior**:
-   - Check status before processing tool calls
-   - If `status='indexing'`, poll until complete (60s timeout)
-   - Return helpful error if timeout
-   - Trigger indexing if DB doesn't exist
+3. ✅ **MCP Server - Auto-wait behavior** (v0.7.0):
+   - ✅ Check status before processing tool calls
+   - ✅ If `status='indexing'`, poll until complete (60s timeout)
+   - ✅ Return helpful error if timeout
+   - ✅ Trigger indexing if DB doesn't exist
 
-4. **New MCP tool**: `wait_for_index(timeout_seconds=60)`
-   - Explicitly wait for indexing to complete
-   - Return progress updates
-   - Useful for large codebases
+4. ✅ **New MCP tool**: `wait_for_index(timeout_seconds=60)` (v0.7.0)
+   - ✅ Explicitly wait for indexing to complete
+   - ✅ Return progress updates
+   - ✅ Configurable timeout
 
-### Benefits
-- Tools "just work" even on first use
-- Users don't get confusing empty results
-- Can show progress during long indexing
-- Can detect and recover from hung indexing
+### Benefits Achieved ✅
+- ✅ Tools "just work" even on first use
+- ✅ Users don't get confusing empty results
+- ✅ Can show progress during long indexing
+- ✅ Can detect and recover from hung indexing
+- ✅ Database protected from corruption (v0.7.1)
 
-### Watchdog for Recovery
+### Watchdog for Recovery ✅ IMPLEMENTED (v0.7.0)
 
-**Problem**: Indexing can crash/hang leaving status stuck at 'indexing'
+**Problem**: (SOLVED) ~~Indexing can crash/hang leaving status stuck at 'indexing'~~
 
 **Solution**: Add watchdog logic in MCP server
 
