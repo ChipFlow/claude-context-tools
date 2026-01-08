@@ -37,7 +37,7 @@ from tree_sitter import Language, Parser, Node
 
 
 # Cache format version - bump when Symbol structure or file selection changes
-CACHE_VERSION = 4
+CACHE_VERSION = 5  # v5: Added FTS5 table for text search
 
 # Default to 50% of available cores for parsing, max 8 workers
 # Using threads (not processes) to avoid memory duplication
@@ -73,6 +73,16 @@ class Symbol:
     def from_dict(cls, d: dict) -> "Symbol":
         """Create from dictionary."""
         return cls(**d)
+
+
+@dataclass
+class TextElement:
+    """A searchable text element (comment, docstring, string literal)."""
+    file_path: str
+    line_number: int
+    element_type: str  # "comment", "docstring", "string_literal"
+    content: str
+    symbol_name: str | None = None  # Symbol name if this is a docstring
 
 
 @dataclass
@@ -766,11 +776,24 @@ def write_symbols_to_sqlite(symbols: list[Symbol], db_path: Path) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_file ON symbols(file_path)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_kind ON symbols(kind)")
 
+    # Create FTS5 virtual table for full-text search (v5+)
+    conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS code_text_fts USING fts5(
+            file_path UNINDEXED,
+            line_number UNINDEXED,
+            element_type UNINDEXED,
+            symbol_name UNINDEXED,
+            content,
+            tokenize='unicode61 remove_diacritics 2'
+        )
+    """)
+
     # Use explicit transaction for all writes - prevents partial state on crash
     conn.execute("BEGIN IMMEDIATE")
     try:
         # Clear existing data and insert new
         conn.execute("DELETE FROM symbols")
+        conn.execute("DELETE FROM code_text_fts")  # Clear FTS table too
 
         conn.executemany(
             """INSERT INTO symbols (name, kind, signature, docstring, file_path, line_number, end_line_number, parent)
