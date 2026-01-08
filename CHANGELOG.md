@@ -5,6 +5,17 @@ All notable changes to the context-tools plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.6] - 2026-01-08
+
+### Changed
+- **More directive session start**: Changed from "available" to "ALWAYS try MCP tools BEFORE grep" with specific triggers
+- **Decision tree in SKILL.md**: Visual flowchart asking "Am I searching for code symbols?" before using grep
+- **Concrete examples**: Added bullet points showing enum/struct/class lookups and function patterns
+- **Rust enum example**: Added real user case of finding `InstructionData` enum variants (Phi vs PhiNode)
+
+### Fixed
+- Claude was still defaulting to grep despite v0.8.5 improvements - now more explicit about when to use MCP tools
+
 ## [0.8.5] - 2026-01-08
 
 ### Added

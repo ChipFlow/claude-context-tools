@@ -14,6 +14,19 @@ This skill provides intelligent context management for large codebases through:
 
 ## Using MCP Tools - PRIMARY CODE EXPLORATION METHOD
 
+**⚡ DECISION TREE - Ask yourself BEFORE using Grep/Search/Bash:**
+
+```
+Am I searching for code symbols (functions, classes, enums, structs, types)?
+├─ YES → Use MCP tools (search_symbols / get_symbol_content / get_file_symbols)
+│         Example: Finding "enum InstructionData" → search_symbols("InstructionData")
+│         Example: Finding "Phi" variant → get_symbol_content("InstructionData")
+│
+└─ NO → Am I searching for text/comments/strings/config values?
+          └─ YES → Use Grep/Search
+                   Example: Finding string literals, documentation, JSON values
+```
+
 **CRITICAL**: Use repo-map tools as your FIRST approach when you need to:
 - **Find a function/class/method by name or pattern** → `search_symbols`
 - **Understand how to use a function** (parameters, return type) → `search_symbols` or `get_symbol_content`
@@ -90,6 +103,27 @@ mcp__plugin_context-tools_repo-map__get_file_symbols
 file: "src/utils.py"
 ```
 Result: Complete list of all functions/classes with signatures and docstrings.
+
+### Example 4: Finding Rust enum variants (Real user case)
+
+User needs to check if it's `Phi` or `PhiNode` in `enum InstructionData`.
+
+**Inefficient approach** (DON'T DO THIS):
+```bash
+grep -n "enum InstructionData" openvaf-py/vendor/OpenVAF/openvaf/mir/src
+grep -n "Phi" openvaf-py/vendor/OpenVAF/openvaf/mir/src/instructions.rs
+```
+Problems: Multiple searches, manual parsing, easy to miss correct variant.
+
+**Efficient approach** (DO THIS):
+```
+mcp__plugin_context-tools_repo-map__search_symbols
+pattern: "InstructionData"
+
+mcp__plugin_context-tools_repo-map__get_symbol_content
+name: "InstructionData"
+```
+Result: Complete enum with all variants visible, including `PhiNode(_)`.
 
 ## First Time Setup
 

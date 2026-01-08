@@ -44,6 +44,33 @@ name: "setup_model"
 # Result: Full function source code without knowing which file
 ```
 
+### Example 2: Finding Rust enum variants (Real user interaction)
+
+**Scenario**: Need to find the correct variant name for `enum InstructionData` (e.g., is it `Phi` or `PhiNode`?)
+
+**Inefficient approach** (using grep):
+```bash
+grep -n "enum InstructionData" openvaf-py/vendor/OpenVAF/openvaf/mir/src
+grep -n "Phi" openvaf-py/vendor/OpenVAF/openvaf/mir/src/instructions.rs | head -10
+# Problems:
+# - Multiple searches needed
+# - Have to manually parse enum definition
+# - Easy to miss the correct variant name
+```
+
+**Efficient approach** (using MCP tools):
+```
+mcp__plugin_context-tools_repo-map__search_symbols
+pattern: "InstructionData"
+# Result: Finds the enum definition location instantly
+
+mcp__plugin_context-tools_repo-map__get_symbol_content
+name: "InstructionData"
+# Result: Complete enum definition showing all variants including PhiNode(_)
+```
+
+Benefits: One search, complete enum definition, see all variants at once.
+
 ## Available MCP Tools
 
 **Search for symbols by pattern:**
