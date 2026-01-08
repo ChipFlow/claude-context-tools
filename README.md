@@ -30,6 +30,31 @@ Helps Claude remember important discoveries:
 - Global learnings in `~/.claude/learnings.md`
 - Prompted to save learnings before context compaction
 
+## What's New in v0.8.0
+
+### 🏗️ Multiprocess Architecture
+- MCP server spawns indexing subprocess (no longer thread-based)
+- Watchdog can kill hung processes with resource limits (4GB memory, 20 min CPU)
+- MCP server stays responsive even during indexing
+
+### 📂 Dynamic Directory Support
+- **Switch between projects without restarting!**
+- MCP tools automatically adapt to current working directory
+- Each project maintains its own index
+- Tools "just work" wherever you are
+
+### 🔒 Simplified Concurrency
+- Rely on SQLite WAL mode + transactions (removed custom file locking)
+- Multiple MCP servers can safely coexist
+- Clean, robust concurrent access
+
+### 📊 Comprehensive Logging
+- Rotating logs in `.claude/logs/repo-map-server.log`
+- Track tool usage, indexing events, resource limits
+- Debug issues and understand usage patterns
+
+[See full changelog](CHANGELOG.md)
+
 ## Installation
 
 ### Option 1: Install from GitHub (recommended)
