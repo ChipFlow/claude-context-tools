@@ -136,9 +136,11 @@ These tools use a pre-built SQLite index, making them **much faster than Grep** 
 
 ### Slash Commands
 
+- `/context-tools:mcp-help` - **Guide for using MCP tools effectively** - Shows when to use MCP tools vs grep with real-world examples
 - `/context-tools:repo-map` - Regenerate the repository map
 - `/context-tools:manifest` - Regenerate the project manifest
 - `/context-tools:learnings` - View and manage project learnings
+- `/context-tools:status` - Check repo map indexing status
 
 ## Configuration
 

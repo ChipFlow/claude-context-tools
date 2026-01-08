@@ -84,7 +84,8 @@ fi
 
 # Add repo map summary and MCP tools info
 if [[ -f "${DB_FILE}" ]]; then
-    CONTEXT="${CONTEXT}\n\nMCP symbol search tools (mcp__plugin_context-tools_repo-map__*) use pre-built SQLite index - MUCH faster than Grep for finding code symbols. Prefer these for symbol lookups."
+    CONTEXT="${CONTEXT}\n\n🚀 **Fast Symbol Search Available**: Use MCP tools (mcp__plugin_context-tools_repo-map__*) instead of grep for finding functions/classes/methods. 10-100x faster via pre-built SQLite index."
+    CONTEXT="${CONTEXT}\nRun /context-tools:mcp-help for usage examples and when to use MCP vs grep."
 elif [[ -f "${REPO_MAP}" ]]; then
     CONTEXT="${CONTEXT}\nRepo map available with ${SYMBOL_COUNT} symbols in .claude/repo-map.md"
 fi

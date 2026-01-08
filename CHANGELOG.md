@@ -5,6 +5,17 @@ All notable changes to the context-tools plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.5] - 2026-01-08
+
+### Added
+- **New command**: `/context-tools:mcp-help` - Comprehensive guide showing when to use MCP tools vs grep with real-world examples
+- **Enhanced session start**: More prominent message with emoji and reference to help command
+- **SKILL.md examples**: Added real-world usage scenarios comparing inefficient grep patterns vs efficient MCP tool usage
+
+### Changed
+- Session start now says "🚀 Fast Symbol Search Available" and points to `/context-tools:mcp-help`
+- Better discoverability of MCP tools when Claude explores codebases
+
 ## [0.8.4] - 2026-01-08
 
 ### Changed

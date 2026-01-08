@@ -41,6 +41,56 @@ Before attempting to use MCP tools (mcp__plugin_context-tools_repo-map__*), chec
 2. If tool not found, use sqlite3 fallback to still answer the question
 3. Explain that session needs restart to load MCP server for future use
 
+## Real-World Usage Examples
+
+### Example 1: User asks "Can we compare against OSDI?"
+
+**Inefficient approach** (DON'T DO THIS):
+```bash
+grep -r "setup_model\|setup_instance" jax_spice/devices/*.py
+```
+Problems: Slow, error-prone pattern matching, gets interrupted on large codebases.
+
+**Efficient approach** (DO THIS):
+```
+mcp__plugin_context-tools_repo-map__search_symbols
+pattern: "setup_*"
+```
+Result: Instant list of all `setup_model`, `setup_instance`, etc. with locations and signatures.
+
+### Example 2: User asks "How does the config loader work?"
+
+**Inefficient approach** (DON'T DO THIS):
+```bash
+find . -name "*.py" -exec grep -l "class.*Config" {} \;
+```
+
+**Efficient approach** (DO THIS):
+```
+mcp__plugin_context-tools_repo-map__search_symbols
+pattern: "*Config*"
+kind: "class"
+```
+Then get the source:
+```
+mcp__plugin_context-tools_repo-map__get_symbol_content
+name: "ConfigLoader"
+```
+
+### Example 3: User asks "What functions are in utils.py?"
+
+**Inefficient approach** (DON'T DO THIS):
+```bash
+grep "^def " src/utils.py
+```
+
+**Efficient approach** (DO THIS):
+```
+mcp__plugin_context-tools_repo-map__get_file_symbols
+file: "src/utils.py"
+```
+Result: Complete list of all functions/classes with signatures and docstrings.
+
 ## First Time Setup
 
 **IMPORTANT**: If the user has just installed this plugin:
