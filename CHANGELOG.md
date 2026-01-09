@@ -5,6 +5,14 @@ All notable changes to the context-tools plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.10] - 2026-01-09
+
+### Added
+- **Test coverage for exact paths**: Added test cases for list_files with exact paths (no wildcards)
+  - `test_exact_path()` - verifies exact file name matches (e.g., "device.py")
+  - `test_nonexistent_exact_path()` - verifies nonexistent files return empty list correctly
+  - Total test coverage: 6/6 tests passing
+
 ## [0.8.9] - 2026-01-09
 
 ### Changed

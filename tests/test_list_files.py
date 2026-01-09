@@ -147,6 +147,54 @@ def test_list_device_files():
         return True  # Not a failure - there might not be device files
 
 
+def test_exact_path():
+    """Test finding file by exact path (no wildcards)."""
+    print("\n" + "=" * 60)
+    print("TEST 5: list_files('device.py') - Exact path, no wildcards")
+    print("=" * 60)
+    print("Use Case: User asks 'Does device.py exist?'\n")
+
+    result = list_files(pattern="device.py")
+
+    if "error" in result:
+        print(f"❌ FAIL: {result['error']}")
+        return False
+
+    files = result["files"]
+    if files and "device.py" in files:
+        print(f"✅ PASS: Found exact file")
+        for f in files:
+            print(f"  - {f}")
+        return True
+    else:
+        print(f"❌ FAIL: Exact path 'device.py' not found")
+        print(f"Note: SQL LIKE 'device.py' should match 'device.py' exactly")
+        print(f"Returned: {files}")
+        return False
+
+
+def test_nonexistent_exact_path():
+    """Test finding file that doesn't exist."""
+    print("\n" + "=" * 60)
+    print("TEST 6: list_files('nonexistent.py') - File doesn't exist")
+    print("=" * 60)
+    print("Use Case: User asks about file that doesn't exist\n")
+
+    result = list_files(pattern="nonexistent.py")
+
+    if "error" in result:
+        print(f"❌ FAIL: {result['error']}")
+        return False
+
+    files = result["files"]
+    if len(files) == 0:
+        print(f"✅ PASS: Correctly returned empty list for nonexistent file")
+        return True
+    else:
+        print(f"⚠️  UNEXPECTED: Found files when none expected: {files}")
+        return False
+
+
 def run_all_tests():
     """Run all test cases."""
     print("\n" + "=" * 60)
@@ -164,6 +212,8 @@ def run_all_tests():
     results.append(("List Python files (*.py)", test_list_python_files()))
     results.append(("List specific file (*instructions*)", test_list_specific_file()))
     results.append(("List device files (*device*)", test_list_device_files()))
+    results.append(("Exact path (device.py)", test_exact_path()))
+    results.append(("Nonexistent file (nonexistent.py)", test_nonexistent_exact_path()))
 
     # Summary
     print("\n" + "=" * 60)
