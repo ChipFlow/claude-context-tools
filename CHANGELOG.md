@@ -5,6 +5,28 @@ All notable changes to the context-tools plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.14] - 2026-01-09
+
+### Added
+- **Post-compaction reorientation system** - Automatically restores context after `/compact`
+  - PreCompact hook creates `.claude/needs-reorientation` flag
+  - UserPromptSubmit hook detects flag and prepends reorientation context to first prompt after compaction
+  - Context includes: MCP tools reminder, project structure, key components, recent learnings
+  - All formatted in clean, scannable markdown
+  - Flag automatically removed after first use
+- **Enhanced learnings reminder** - Added "Solution approaches discussed and agreed with user" to precompact message
+
+### Changed
+- **Improved reorientation format** - Switched from raw SQL/JSON output to clean markdown
+  - Section headings: `## MCP Tools Available`, `## Project Structure`, etc.
+  - Inline code formatting with backticks
+  - File locations shown as `path:line`
+  - Natural, hierarchical structure for quick scanning
+
+### Fixed
+- **Context loss after compaction** - Claude no longer forgets major implementations (like OSDI Python bindings) after `/compact`
+- **MCP tools reminder after compaction** - Claude receives fresh reminder to use MCP tools instead of Search/Grep
+
 ## [0.8.13] - 2026-01-09
 
 ### Changed
