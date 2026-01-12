@@ -5,6 +5,35 @@ All notable changes to the context-tools plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-01-09
+
+### Changed
+- **BREAKING: Switched to Stop hook pattern for post-compaction reorientation** - Much more effective!
+  - Inspired by [context-forge](https://github.com/webdevtodayjason/claude-hooks) approach
+  - Stop hook **BLOCKS Claude** until context is restored (vs passive injection in v0.8.14)
+  - Returns `{"decision": "block", "reason": "Instructions..."}` to force action
+  - Makes Claude **actively read files** instead of passively receiving injected content
+  - 5-minute window for detecting recent compaction
+
+### How It Works Now
+1. **PreCompact**: Creates `.claude/needs-reorientation` marker file
+2. **Compaction happens** (Claude Code does this)
+3. **Claude finishes response** → Stop hook fires
+4. **Stop hook detects marker** (if <5 min old) → **BLOCKS Claude**
+5. **Claude must read** CLAUDE.md, learnings.md, and query MCP tools to restore context
+6. Marker removed (one-time per compaction)
+
+### Why This Is Better
+- ✅ **Blocks Claude** - Can't continue without reading files (vs passive prompt injection)
+- ✅ **Active restoration** - Claude reads and processes files (more effective than passive text)
+- ✅ **Uses existing files** - CLAUDE.md, learnings.md (no generated content needed)
+- ✅ **Proven pattern** - Based on context-forge's successful implementation
+- ✅ **5-minute window** - Prevents stale marker triggering
+
+### Removed
+- UserPromptSubmit hook approach (replaced with Stop hook)
+- `post-compact-reorient.sh` (replaced with `stop-reorient.sh`)
+
 ## [0.8.15] - 2026-01-09
 
 ### Changed

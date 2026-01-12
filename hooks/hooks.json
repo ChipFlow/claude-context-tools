@@ -42,13 +42,13 @@
         ]
       }
     ],
-    "UserPromptSubmit": [
+    "Stop": [
       {
         "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/post-compact-reorient.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/stop-reorient.sh"
           }
         ]
       }
