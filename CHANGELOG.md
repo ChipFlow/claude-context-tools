@@ -5,6 +5,24 @@ All notable changes to the context-tools plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.15] - 2026-01-09
+
+### Changed
+- **All MCP tools now return markdown instead of JSON** - Major improvement for Claude readability
+  - `search_symbols()` - Returns formatted list with `**Name** (kind) - path:line` and docstrings
+  - `get_file_symbols()` - Returns organized symbol list with signatures and docs
+  - `get_symbol_content()` - Returns formatted markdown with syntax-highlighted code blocks
+  - `list_files()` - Returns grouped file list organized by directory
+  - Clean, scannable format with headers, bullet points, and inline code
+  - Error messages now use emoji (❌) for quick visual scanning
+
+### Benefits
+- ✅ Much easier for Claude to read and understand
+- ✅ Natural markdown format instead of raw JSON structures
+- ✅ Syntax highlighting in code blocks
+- ✅ Hierarchical organization (headings, grouped content)
+- ✅ Inline documentation and docstrings included where available
+
 ## [0.8.14] - 2026-01-09
 
 ### Added

@@ -576,10 +576,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             logger.warning(f"Tool {name} returned error: {result.get('error')}")
         elif isinstance(result, list):
             logger.info(f"Tool {name} returned {len(result)} results")
+        elif isinstance(result, str):
+            logger.info(f"Tool {name} returned markdown ({len(result)} chars)")
         else:
             logger.info(f"Tool {name} completed successfully")
 
-        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+        # Return markdown strings directly, JSON-encode dicts/lists
+        if isinstance(result, str):
+            return [TextContent(type="text", text=result)]
+        else:
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
     except FileNotFoundError as e:
         # DB doesn't exist - trigger indexing
         logger.info(f"DB not found, triggering indexing for tool {name}")
@@ -596,8 +602,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps({"error": f"Tool error: {e}"}))]
 
 
-def search_symbols(pattern: str, kind: str | None = None, limit: int = 20) -> list[dict]:
-    """Search for symbols by name pattern."""
+def search_symbols(pattern: str, kind: str | None = None, limit: int = 20) -> str:
+    """Search for symbols by name pattern. Returns markdown."""
     conn = get_db()
     try:
         # Convert glob pattern to SQL LIKE pattern
@@ -620,32 +626,86 @@ def search_symbols(pattern: str, kind: str | None = None, limit: int = 20) -> li
         results = []
         for row in rows:
             if fnmatch.fnmatch(row["name"], pattern):
-                results.append(row_to_dict(row))
+                results.append(row)
 
         # If no results with strict fnmatch, return SQL results
         if not results:
-            results = [row_to_dict(row) for row in rows]
+            results = list(rows)
 
-        return results[:limit]
+        results = results[:limit]
+
+        if not results:
+            return f"No symbols found matching pattern: `{pattern}`"
+
+        # Format as markdown
+        md = f"## Found {len(results)} symbol(s) matching `{pattern}`\n\n"
+        for row in results:
+            name = row["name"]
+            kind_str = row["kind"]
+            path = row["file_path"]
+            line = row["line_number"]
+
+            if row["parent"]:
+                name = f"{row['parent']}.{name}"
+
+            md += f"- **{name}** ({kind_str}) - `{path}:{line}`\n"
+
+            if row["docstring"]:
+                # First line of docstring only
+                first_line = row["docstring"].split("\n")[0]
+                if len(first_line) > 80:
+                    first_line = first_line[:77] + "..."
+                md += f"  _{first_line}_\n"
+
+        return md
     finally:
         conn.close()
 
 
-def get_file_symbols(file: str) -> list[dict]:
-    """Get all symbols in a specific file."""
+def get_file_symbols(file: str) -> str:
+    """Get all symbols in a specific file. Returns markdown."""
     conn = get_db()
     try:
         cursor = conn.execute(
             "SELECT * FROM symbols WHERE file_path = ? ORDER BY line_number",
             [file]
         )
-        return [row_to_dict(row) for row in cursor.fetchall()]
+        rows = cursor.fetchall()
+
+        if not rows:
+            return f"No symbols found in file: `{file}`"
+
+        # Format as markdown
+        md = f"## Symbols in `{file}`\n\n"
+        md += f"Found {len(rows)} symbol(s):\n\n"
+
+        for row in rows:
+            name = row["name"]
+            kind = row["kind"]
+            line = row["line_number"]
+
+            if row["parent"]:
+                name = f"{row['parent']}.{name}"
+
+            md += f"- **{name}** ({kind}) - line {line}\n"
+
+            if row["signature"]:
+                md += f"  `{row['signature']}`\n"
+
+            if row["docstring"]:
+                # First line of docstring only
+                first_line = row["docstring"].split("\n")[0]
+                if len(first_line) > 80:
+                    first_line = first_line[:77] + "..."
+                md += f"  _{first_line}_\n"
+
+        return md
     finally:
         conn.close()
 
 
-def get_symbol_content(name: str, kind: str | None = None) -> dict:
-    """Get the source code content of a symbol by exact name."""
+def get_symbol_content(name: str, kind: str | None = None) -> str:
+    """Get the source code content of a symbol by exact name. Returns markdown."""
     conn = get_db()
     project_root = get_project_root()
     try:
@@ -666,28 +726,28 @@ def get_symbol_content(name: str, kind: str | None = None) -> dict:
         rows = cursor.fetchall()
 
         if not rows:
-            return {"error": f"Symbol '{name}' not found"}
+            return f"❌ Symbol `{name}` not found"
 
         # If multiple matches, return info about all of them
         if len(rows) > 1 and kind is None:
-            matches = [row_to_dict(row) for row in rows]
-            return {
-                "error": f"Multiple symbols named '{name}' found. Specify 'kind' to disambiguate.",
-                "matches": matches
-            }
+            md = f"❌ Multiple symbols named `{name}` found. Specify 'kind' to disambiguate.\n\n"
+            md += f"Found {len(rows)} matches:\n\n"
+            for row in rows:
+                display_name = f"{row['parent']}.{row['name']}" if row["parent"] else row["name"]
+                md += f"- **{display_name}** ({row['kind']}) - `{row['file_path']}:{row['line_number']}`\n"
+            return md
 
         row = rows[0]
-        symbol_info = row_to_dict(row)
         file_path = project_root / row["file_path"]
 
         if not file_path.exists():
-            return {"error": f"File not found: {row['file_path']}", "symbol": symbol_info}
+            return f"❌ File not found: `{row['file_path']}`"
 
         # Read file content
         try:
             lines = file_path.read_text(encoding="utf-8").splitlines()
         except (IOError, UnicodeDecodeError) as e:
-            return {"error": f"Could not read file: {e}", "symbol": symbol_info}
+            return f"❌ Could not read file: {e}"
 
         start_line = row["line_number"]
         end_line = row["end_line_number"]
@@ -700,11 +760,25 @@ def get_symbol_content(name: str, kind: str | None = None) -> dict:
         content_lines = lines[start_line - 1:end_line]
         content = "\n".join(content_lines)
 
-        return {
-            "symbol": symbol_info,
-            "content": content,
-            "location": f"{row['file_path']}:{start_line}-{end_line}"
-        }
+        # Detect language for syntax highlighting
+        file_ext = Path(row["file_path"]).suffix.lstrip(".")
+        lang_map = {"py": "python", "js": "javascript", "ts": "typescript", "rs": "rust", "c": "c", "cpp": "cpp", "h": "c", "hpp": "cpp"}
+        lang = lang_map.get(file_ext, file_ext)
+
+        # Build markdown
+        display_name = f"{row['parent']}.{row['name']}" if row["parent"] else row["name"]
+        md = f"## {display_name} ({row['kind']})\n\n"
+        md += f"**Location:** `{row['file_path']}:{start_line}-{end_line}`\n\n"
+
+        if row["signature"]:
+            md += f"**Signature:** `{row['signature']}`\n\n"
+
+        if row["docstring"]:
+            md += f"**Documentation:**\n```\n{row['docstring']}\n```\n\n"
+
+        md += f"**Source Code:**\n```{lang}\n{content}\n```\n"
+
+        return md
     finally:
         conn.close()
 
@@ -840,10 +914,10 @@ def get_indexing_progress() -> dict | None:
         return None
 
 
-def list_files(pattern: str | None = None, limit: int = 100) -> dict:
+def list_files(pattern: str | None = None, limit: int = 100) -> str:
     """
     List all indexed files, optionally filtered by glob pattern.
-    Much faster than find/ls - queries pre-built index.
+    Much faster than find/ls - queries pre-built index. Returns markdown.
     """
     conn = get_db()
     try:
@@ -866,12 +940,44 @@ def list_files(pattern: str | None = None, limit: int = 100) -> dict:
 
         files = [row["file_path"] for row in rows]
 
-        return {
-            "files": files,
-            "count": len(files),
-            "pattern": pattern or "all",
-            "limit": limit
-        }
+        if not files:
+            pattern_str = f" matching `{pattern}`" if pattern else ""
+            return f"No files found{pattern_str}"
+
+        # Format as markdown
+        pattern_str = f" matching `{pattern}`" if pattern else ""
+        md = f"## Found {len(files)} file(s){pattern_str}\n\n"
+
+        # Group by directory for better readability
+        dirs = {}
+        for file in files:
+            if "/" in file:
+                dir_name = file.rsplit("/", 1)[0]
+                file_name = file.rsplit("/", 1)[1]
+            else:
+                dir_name = "."
+                file_name = file
+
+            if dir_name not in dirs:
+                dirs[dir_name] = []
+            dirs[dir_name].append(file_name)
+
+        # Output grouped by directory
+        for dir_name in sorted(dirs.keys()):
+            if dir_name == ".":
+                md += "**Root directory:**\n"
+            else:
+                md += f"**`{dir_name}/`:**\n"
+
+            for file_name in sorted(dirs[dir_name]):
+                md += f"- {file_name}\n"
+
+            md += "\n"
+
+        if len(files) >= limit:
+            md += f"\n*Showing first {limit} files. Use `limit` parameter to see more.*\n"
+
+        return md
     finally:
         conn.close()
 
