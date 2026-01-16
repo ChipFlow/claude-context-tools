@@ -5,6 +5,14 @@ All notable changes to the context-tools plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3] - 2026-01-16
+
+### Changed
+- **Learnings reminder in Stop hook** - Moved learnings update reminder to post-compaction block
+  - Stop hook now prompts to update learnings.md BEFORE restoring context
+  - More effective than precompact reminder (which gets lost during compaction)
+  - Claude sees reminder right when being forced to restore context
+
 ## [0.9.2] - 2026-01-14
 
 ### Fixed

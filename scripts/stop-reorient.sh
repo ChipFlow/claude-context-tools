@@ -37,7 +37,14 @@ rm -f "${MARKER_FILE}"
 # Build refresh instructions
 INSTRUCTIONS="🔄 **Context Refresh Required After Compaction**
 
-To restore full project context, please read these files in order:
+**FIRST: Update learnings if you built anything significant this session:**
+📝 Update ${CLAUDE_DIR}/learnings.md with:
+   • New features/APIs implemented
+   • Integration points added (e.g., Python bindings, new modules)
+   • Solution approaches discussed and agreed with user
+   • Non-obvious design decisions or debugging insights
+
+**THEN: Restore context by reading files in order:**
 
 1. **Read ${CLAUDE_DIR}/CLAUDE.md** (if it exists) - Project rules and guidelines
 2. **Read ${CLAUDE_DIR}/learnings.md** (if it exists) - Recent work and discoveries
