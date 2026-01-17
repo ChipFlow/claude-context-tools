@@ -39,6 +39,9 @@ from tree_sitter import Language, Parser, Node
 # Cache format version - bump when Symbol structure or file selection changes
 CACHE_VERSION = 5  # v5: Added FTS5 table for text search
 
+# Database schema version - bump when SQLite schema changes
+DB_VERSION = 1  # v1: Initial versioned schema
+
 # Default to 50% of available cores for parsing, max 8 workers
 # Using threads (not processes) to avoid memory duplication
 DEFAULT_WORKERS_PERCENT = 50
@@ -803,6 +806,7 @@ def write_symbols_to_sqlite(symbols: list[Symbol], db_path: Path) -> None:
 
         # Set metadata to indicate successful indexing completion
         set_metadata(conn, 'status', 'completed')
+        set_metadata(conn, 'db_version', str(DB_VERSION))
         set_metadata(conn, 'last_indexed', datetime.now().isoformat())
         set_metadata(conn, 'symbol_count', str(len(symbols)))
 
@@ -1009,6 +1013,7 @@ def main():
             )
         """)
         set_metadata(conn, 'status', 'indexing')
+        set_metadata(conn, 'db_version', str(DB_VERSION))
         set_metadata(conn, 'index_start_time', datetime.now().isoformat())
         conn.commit()  # Must commit since set_metadata no longer commits
         conn.close()

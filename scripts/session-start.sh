@@ -9,22 +9,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${PWD}"
 CLAUDE_DIR="${PROJECT_ROOT}/.claude"
 
-# --- Cleanup old plugin versions ---
-# CLAUDE_PLUGIN_ROOT is set by Claude Code and points to the current version
-if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]]; then
-    PLUGIN_CACHE_DIR="$(dirname "${CLAUDE_PLUGIN_ROOT}")"
-    CURRENT_VERSION="$(basename "${CLAUDE_PLUGIN_ROOT}")"
-
-    # Remove old cached versions (keep only current)
-    if [[ -d "${PLUGIN_CACHE_DIR}" ]]; then
-        for OLD_VERSION in "${PLUGIN_CACHE_DIR}"/*; do
-            if [[ -d "${OLD_VERSION}" && "$(basename "${OLD_VERSION}")" != "${CURRENT_VERSION}" ]]; then
-                rm -rf "${OLD_VERSION}" 2>/dev/null || true
-            fi
-        done
-    fi
-fi
-
 # Ensure .claude directory exists
 mkdir -p "${CLAUDE_DIR}"
 

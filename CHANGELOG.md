@@ -5,6 +5,19 @@ All notable changes to the context-tools plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.4] - 2026-01-16
+
+### Added
+- **Database versioning** - Added `DB_VERSION = 1` constant for future schema migrations
+  - Stored in metadata table as `db_version`
+  - Enables safe schema changes and version checking in the future
+
+### Changed
+- **Removed plugin version cleanup** - No longer deletes old plugin versions at session start
+  - Previous cleanup broke concurrent Claude sessions using different plugin versions
+  - Prevents conflicts when multiple sessions run in the same project directory
+  - Users can manually clean up old versions if needed
+
 ## [0.9.3] - 2026-01-16
 
 ### Changed
